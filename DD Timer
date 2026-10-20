@@ -69,8 +69,8 @@ local cfg = ac.configValues({
   FONT = 'Segoe UI',
   POS_X = 0.5,
   POS_Y = 0.03,
-  SCALE = 1.0,
-  BG_DARKEN = 0.45,
+  SCALE = 0.7,
+  BG_DARKEN = 0.0,
   ACCENT_COLOR = rgbm(0.55, 0.15, 0.85, 1),
 })
 
@@ -90,35 +90,7 @@ local assetsFolder = nil
 local drawUICalled = false
 local fallbackTimer = 0
 
----------------------------------------------------------------------------
--- Saved position / size (stored on the player's PC)
----------------------------------------------------------------------------
 
-local saved = ac.storage({
-  posX = cfg.POS_X,
-  posY = cfg.POS_Y,
-  scale = cfg.SCALE,
-}, 'maptimer.')
-
--- "live" values change every frame while dragging; they are only written to
--- storage when the mouse is released (or shortly after scrolling).
-local live = { posX = saved.posX, posY = saved.posY, scale = saved.scale }
-local saveTimer = 0
-local dragging, resizing = false, false
-
-local function savePosition()
-  saveTimer = 0
-  pcall(function()
-    saved.posX = live.posX
-    saved.posY = live.posY
-    saved.scale = live.scale
-  end)
-end
-
-local function resetPosition()
-  live.posX, live.posY, live.scale = cfg.POS_X, cfg.POS_Y, cfg.SCALE
-  savePosition()
-end
 
 ---------------------------------------------------------------------------
 -- Assets (sound + optional background) downloaded from ASSETS_URL
