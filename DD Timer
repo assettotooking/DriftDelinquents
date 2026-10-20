@@ -62,7 +62,7 @@ local cfg = ac.configValues({
   MAP_DURATION_MINUTES = 0,
   WARNING_SECONDS = 120,
   BACKGROUND_URL = '',
-  ASSETS_URL = '',
+  ASSETS_URL = 'https://drive.google.com/file/d/1FiIWjiW4VBIv7IOvbdN2hPkCvaAk667Z/view?usp=drive_link',
   SOUND_FILE = 'nuclear-bomb-warning.mp3',
   SOUND_VOLUME = 0.4,
   SHOW_TOAST = true,
@@ -70,7 +70,7 @@ local cfg = ac.configValues({
   POS_X = 0.5,
   POS_Y = 0.03,
   SCALE = 0.65,
-  BG_DARKEN = 1.0,
+  BG_DARKEN = 0.45,
   ACCENT_COLOR = rgbm(0.55, 0.15, 0.85, 1),
 })
 
@@ -219,7 +219,7 @@ end
 
 local function drawBackground(size)
   -- solid base so the panel is readable even if the image is missing or still loading
-  ui.drawRectFilled(vec2(0, 0), size, rgbm(0.05, 0.05, 0.08, 0.92))
+  ui.drawRectFilled(vec2(0, 0), size, rgbm(0.05, 0.05, 0.08, 0.0))
 
   local source = nil
   if cfg.BACKGROUND_URL and cfg.BACKGROUND_URL ~= '' then
