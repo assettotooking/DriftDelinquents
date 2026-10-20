@@ -67,9 +67,9 @@ local cfg = ac.configValues({
   SOUND_VOLUME = 0.4,
   SHOW_TOAST = true,
   FONT = 'Segoe UI',
-  POS_X = 0.05,
+  POS_X = 0.12,
   POS_Y = 0.03,
-  SCALE = 0.75,
+  SCALE = 0.80,
   BG_DARKEN = 0.45,
   ACCENT_COLOR = rgbm(0.55, 0.15, 0.85, 1),
 })
