@@ -69,7 +69,7 @@ local cfg = ac.configValues({
   FONT = 'Segoe UI',
   POS_X = 0.5,
   POS_Y = 0.03,
-  SCALE = 0.7,
+  SCALE = 1.0,
   BG_DARKEN = 0.45,
   ACCENT_COLOR = rgbm(0.55, 0.15, 0.85, 1),
 })
@@ -90,8 +90,22 @@ local assetsFolder = nil
 local drawUICalled = false
 local fallbackTimer = 0
 
+---------------------------------------------------------------------------
+-- Saved position / size (stored on the player's PC)
+---------------------------------------------------------------------------
 
+-- No more permanent saving. Position/size only last for the current session.
+local live = { posX = cfg.POS_X, posY = cfg.POS_Y, scale = cfg.SCALE }
+local saveTimer = 0          -- kept only so the rest of the code doesn’t explode
+local dragging, resizing = false, false
 
+local function savePosition()
+  -- intentionally empty – we don’t want to remember your shitty placement
+end
+
+local function resetPosition()
+  live.posX, live.posY, live.scale = cfg.POS_X, cfg.POS_Y, cfg.SCALE
+end
 ---------------------------------------------------------------------------
 -- Assets (sound + optional background) downloaded from ASSETS_URL
 ---------------------------------------------------------------------------
