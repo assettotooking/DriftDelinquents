@@ -70,7 +70,7 @@ local cfg = ac.configValues({
   POS_X = 0.5,
   POS_Y = 0.03,
   SCALE = 0.7,
-  BG_DARKEN = 0.0,
+  BG_DARKEN = 0.45,
   ACCENT_COLOR = rgbm(0.55, 0.15, 0.85, 1),
 })
 
