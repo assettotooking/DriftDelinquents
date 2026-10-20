@@ -1,19 +1,16 @@
 --[[
   MAP TIMER  -  CSP online script for AssettoServer
   Shows a countdown until the map ends, a server name, a custom background,
-  and plays a sound when the warning time (default: the last minute) is reached.
-  Rounded, semi-transparent panel with a purple accent (all adjustable below).
+  and plays a sound when the warning time (default 2 minutes) is reached.
 
   MOVE / RESIZE (each player, in game)
   Hover the panel with the mouse cursor, then:
     - Hold left mouse button and drag      -> move the panel
     - Mouse wheel, or drag the bottom-right corner -> make it bigger / smaller
     - Double-click                          -> reset to the default position/size
-    - Right-click                           -> play the warning sound (test it)
-  Position and size are saved on each player's PC and restored next time
-  (under its own storage keys, so it doesn't clash with other scripts' saved positions).
-  If the background image or the sound can't be loaded, hovering the panel
-  shows a message about it in the strip at the bottom.
+  Position and size are saved on each player's PC and restored next time.
+  POS_X / POS_Y / SCALE below are only the defaults for players who haven't
+  moved it yet (and what double-click resets to).
 
   HOW TO ADD IT
   1. Host this file somewhere with a direct link (e.g. your server's wwwroot
@@ -23,43 +20,34 @@
        [SCRIPT_MAPTIMER]
        SCRIPT = "https://your-link/map_timer.lua"
        SERVER_NAME = "My Server Name"
-       ASSETS_URL = "https://your-link/map_timer_assets.zip"
-
-     The zip (background.png) is one way to supply the background. The sound
-     link is already filled in below (SOUND_URL) and plays at 1:00 left.
-     All other settings are optional:
-
-       WARNING_SECONDS = 60
        MAP_DURATION_MINUTES = 0
+       WARNING_SECONDS = 120
        BACKGROUND_URL = ""
-       SOUND_URL = "https://your-sound-link"
+       ASSETS_URL = ""
+       SOUND_FILE = "warning.mp3"
        SOUND_VOLUME = 1.0
-       OPACITY = 0.7
        SHOW_TOAST = 1
        POS_X = 0.5
        POS_Y = 0.03
        SCALE = 1.0
-       BG_DARKEN = 0.15
+       BG_DARKEN = 0.45
+
+     Every setting is optional. Anything you leave out uses the default
+     written in the table below.
 
   SETTINGS
   SERVER_NAME           Text shown at the top of the panel. Empty = real server name.
   MAP_DURATION_MINUTES  0 = use the session length from the server.
                         Above 0 = use this many minutes instead (counted from the
                         start of the session, so everyone sees the same time).
-  WARNING_SECONDS       When the countdown reaches this, the sound plays and the
-                        timer turns red (60 = last minute, 120 = last 2 minutes).
-  ASSETS_URL            Direct link to a .zip containing background.png and the
-                        sound file. Must be a direct download link.
-  BACKGROUND_URL        Optional direct link to a PNG/JPG, used instead of
-                        background.png from the zip. Use quotes. For imgur use the
-                        i.imgur.com/....png link, not the imgur.com page.
-  SOUND_URL             Link to the sound. A normal Google Drive share link is
-                        converted to a download link automatically. For best
-                        reliability host the file on a real file host (Catbox, GitHub
-                        raw, your server's wwwroot). A .zip containing the sound file
-                        (named like SOUND_FILE) also works. Empty = use the sound from
-                        ASSETS_URL.
-  SOUND_FILE            File name of the sound inside a zip (zip method only).
+  WARNING_SECONDS       When the countdown reaches this, the sound plays (120 = 2 min).
+  BACKGROUND_URL        Direct link to a PNG/JPG for the panel background. Leave
+                        empty to use background.png from ASSETS_URL, or a plain
+                        dark panel.
+  ASSETS_URL            Direct link to a .zip containing warning.mp3 (and optionally
+                        background.png). Must be a direct download link, not a
+                        Google Drive "share" page.
+  SOUND_FILE            File name of the sound inside the zip.
   SOUND_VOLUME          0.0 - 1.0
   SHOW_TOAST            1 = also show a pop-up message at the warning time.
   POS_X / POS_Y         Default panel position as a fraction of the screen
@@ -67,70 +55,24 @@
   SCALE                 Default size of the panel.
   BG_DARKEN             0 - 1, how much the background image is darkened so the
                         text stays readable.
-  OPACITY               0 - 1, how see-through the panel background is
-                        (1 = solid, 0.7 = default, lower = more transparent).
 ]]
 
 local cfg = ac.configValues({
   SERVER_NAME = '',
   MAP_DURATION_MINUTES = 0,
-  WARNING_SECONDS = 60,
+  WARNING_SECONDS = 120,
   BACKGROUND_URL = '',
   ASSETS_URL = '',
-  SOUND_URL = 'https://drive.google.com/file/d/1FiIWjiW4VBIv7IOvbdN2hPkCvaAk667Z/view?usp=drive_link',
-  SOUND_FILE = 'warning.wav',
-  SOUND_VOLUME = 0.2,
+  SOUND_FILE = 'nuclear-bomb-warning.mp3',
+  SOUND_VOLUME = 0.4,
   SHOW_TOAST = true,
   FONT = 'Segoe UI',
   POS_X = 0.5,
   POS_Y = 0.03,
-  SCALE = 0.7,
-  BG_DARKEN = 0.15,
-  OPACITY = 0.7,
-  ACCENT_COLOR = rgbm(0.62, 0.27, 0.95, 1),
+  SCALE = 1.0,
+  BG_DARKEN = 0.45,
+  ACCENT_COLOR = rgbm(0.55, 0.15, 0.85, 1),
 })
-
-local warned = {}
-local function warnOnce(key, msg)
-  if not warned[key] then
-    warned[key] = true
-    ac.warn('[MapTimer] ' .. msg)
-  end
-end
-
--- Trims spaces and stray quotes from a link taken from the config.
-local function cleanUrl(url)
-  url = tostring(url or '')
-  return (url:gsub('^%s+', ''):gsub('%s+$', ''):gsub('^["\']+', ''):gsub('["\']+$', ''))
-end
-
--- Imgur page links (imgur.com/XXXX) are web pages, not images, so they are
--- pointed at the image file (i.imgur.com/XXXX.png) instead.
-local function normalizeImageUrl(url)
-  url = cleanUrl(url)
-  local id = url:match('^https?://www%.imgur%.com/(%w+)/?$') or url:match('^https?://imgur%.com/(%w+)/?$')
-  if id then
-    url = 'https://i.imgur.com/' .. id .. '.png'
-    ac.log('[MapTimer] imgur page link converted to ' .. url)
-  end
-  return url
-end
-
--- Google Drive "share" links open a web page. Turn them into download links.
-local function normalizeSoundUrl(url)
-  url = cleanUrl(url)
-  local id = url:match('drive%.google%.com/file/d/([%w_%-]+)') or url:match('drive%.google%.com/open%?id=([%w_%-]+)')
-  if id then
-    url = 'https://drive.usercontent.google.com/download?id=' .. id .. '&export=download&confirm=t'
-    ac.log('[MapTimer] Google Drive link converted to a download link')
-  end
-  return url
-end
-
-local backgroundUrl = normalizeImageUrl(cfg.BACKGROUND_URL)
-local assetsUrl = cleanUrl(cfg.ASSETS_URL)
-local soundUrl = normalizeSoundUrl(cfg.SOUND_URL)
-local opacity = math.clamp(tonumber(cfg.OPACITY) or 0.7, 0, 1)
 
 local sim = ac.getSim()
 
@@ -144,12 +86,7 @@ local state = {
 }
 
 local soundEvent = nil
-local soundPlayer = nil
-local soundWait = 0
 local assetsFolder = nil
-local soundStatus = 'none' -- none | loading | ok | failed
-local bgStatus = 'none'    -- none | loading | ok | failed
-local bgFirstTry = nil
 local drawUICalled = false
 local fallbackTimer = 0
 
@@ -157,30 +94,24 @@ local fallbackTimer = 0
 -- Saved position / size (stored on the player's PC)
 ---------------------------------------------------------------------------
 
--- These key names are unique to this script on purpose: other CSP scripts (for
--- example a drift counter) also save "posX", "posY" and "scale", and sharing those
--- names made the two scripts overwrite each other's saved position.
 local saved = ac.storage({
-  mapTimerPosX = cfg.POS_X,
-  mapTimerPosY = cfg.POS_Y,
-  mapTimerScale = cfg.SCALE,
-})
+  posX = cfg.POS_X,
+  posY = cfg.POS_Y,
+  scale = cfg.SCALE,
+}, 'maptimer.')
 
 -- "live" values change every frame while dragging; they are only written to
 -- storage when the mouse is released (or shortly after scrolling).
-local live = { posX = saved.mapTimerPosX, posY = saved.mapTimerPosY, scale = saved.mapTimerScale }
-live.posX = math.clamp(tonumber(live.posX) or cfg.POS_X, 0, 1)
-live.posY = math.clamp(tonumber(live.posY) or cfg.POS_Y, 0, 1)
-live.scale = math.clamp(tonumber(live.scale) or cfg.SCALE, 0.4, 3.0)
+local live = { posX = saved.posX, posY = saved.posY, scale = saved.scale }
 local saveTimer = 0
 local dragging, resizing = false, false
 
 local function savePosition()
   saveTimer = 0
   pcall(function()
-    saved.mapTimerPosX = live.posX
-    saved.mapTimerPosY = live.posY
-    saved.mapTimerScale = live.scale
+    saved.posX = live.posX
+    saved.posY = live.posY
+    saved.scale = live.scale
   end)
 end
 
@@ -190,96 +121,45 @@ local function resetPosition()
 end
 
 ---------------------------------------------------------------------------
--- Assets: background image + sound
--- (online scripts have no file access, so files come from a downloaded zip)
+-- Assets (sound + optional background) downloaded from ASSETS_URL
 ---------------------------------------------------------------------------
 
-local function createSound(filename)
-  local ok, ev = pcall(ac.AudioEvent.fromFile, { filename = filename, use3D = false, loop = false }, false)
-  if ok and ev then
-    soundEvent = ev
-    soundStatus = 'ok'
-    ac.log('[MapTimer] sound ready: ' .. filename)
-  else
-    soundStatus = 'failed'
-    ac.warn('[MapTimer] could not create sound from ' .. filename .. ': ' .. tostring(ev))
-  end
-end
+local function loadAssets()
+  local url = cfg.ASSETS_URL
+  if not url or url == '' then return end
 
--- Direct link to a sound file (.mp3 / .wav / .ogg): stream it with a media player,
--- which follows redirects. Falls back to an audio event if no media player exists.
-local function createDirectSound(url)
-  local ok, player = pcall(function()
-    local p = ui.MediaPlayer(url)
-    pcall(function() p:setAutoPlay(false) end)
-    return p
-  end)
-  if ok and player then
-    soundPlayer = player
-    soundWait = 0
-    ac.log('[MapTimer] sound player created for ' .. url)
-  else
-    createSound(url)
-  end
-end
-
-local function isZipLink(url)
-  return url:lower():find('%.zip') ~= nil
-end
-
-local function downloadZip(url, label, onDone)
   local ok, err = pcall(function()
     web.loadRemoteAssets(url, function(downloadErr, folder)
       if downloadErr or not folder then
-        ac.warn('[MapTimer] could not download ' .. label .. ' (' .. url .. '): ' .. tostring(downloadErr))
-        onDone(nil)
-      else
-        ac.log('[MapTimer] ' .. label .. ' downloaded')
-        onDone(folder)
-      end
-    end)
-  end)
-  if not ok then
-    ac.warn('[MapTimer] ' .. label .. ' download failed: ' .. tostring(err))
-    onDone(nil)
-  end
-end
-
-local function loadAssets()
-  if soundUrl ~= '' then
-    soundStatus = 'loading'
-    if isZipLink(soundUrl) then
-      downloadZip(soundUrl, 'sound zip', function(folder)
-        if folder then createSound(folder .. '/' .. cfg.SOUND_FILE) else soundStatus = 'failed' end
-      end)
-    else
-      createDirectSound(soundUrl) -- direct link to a .wav / .mp3 / .ogg
-    end
-  end
-
-  if assetsUrl ~= '' then
-    if soundUrl == '' then soundStatus = 'loading' end
-    downloadZip(assetsUrl, 'assets zip', function(folder)
-      if not folder then
-        if soundUrl == '' then soundStatus = 'failed' end
+        ac.warn('[MapTimer] could not download assets: ' .. tostring(downloadErr))
         return
       end
       assetsFolder = folder
-      if soundUrl == '' then createSound(folder .. '/' .. cfg.SOUND_FILE) end
+
+      local soundPath = folder .. '/' .. cfg.SOUND_FILE
+      if not io.fileExists(soundPath) then
+        ac.warn('[MapTimer] sound file not found in zip: ' .. cfg.SOUND_FILE)
+        return
+      end
+
+      local okSound, ev = pcall(ac.AudioEvent.fromFile,
+        { filename = soundPath, use3D = false, loop = false }, false)
+      if okSound and ev then
+        soundEvent = ev
+        ac.log('[MapTimer] warning sound loaded')
+      else
+        ac.warn('[MapTimer] could not load sound: ' .. tostring(ev))
+      end
     end)
-  end
+  end)
+
+  if not ok then ac.warn('[MapTimer] asset loading failed: ' .. tostring(err)) end
 end
 
 loadAssets()
 
 local function playWarning()
-  if soundPlayer then
-    pcall(function()
-      soundPlayer:setVolume(cfg.SOUND_VOLUME)
-      soundPlayer:setCurrentTime(0)
-      soundPlayer:play()
-    end)
-  elseif soundEvent then
+  if soundEvent then
     pcall(function()
       soundEvent.volume = cfg.SOUND_VOLUME
       soundEvent:start()
@@ -288,8 +168,8 @@ local function playWarning()
   if cfg.SHOW_TOAST then
     pcall(function()
       local mins = math.floor(cfg.WARNING_SECONDS / 60)
-      local text = mins >= 1 and ('Map ends in ' .. mins .. (mins == 1 and ' minute' or ' minutes'))
-        or ('Map ends in ' .. cfg.WARNING_SECONDS .. ' seconds')
+      local text = mins >= 1 and ('Map switches in ' .. mins .. (mins == 1 and ' minute' or ' minutes'))
+        or ('Map switches in ' .. cfg.WARNING_SECONDS .. ' seconds')
       ui.toast(ui.Icons.Warning, text)
     end)
   end
@@ -319,21 +199,6 @@ local function formatTime(seconds)
   return string.format('%02d:%02d', m, s)
 end
 
-local function checkSoundPlayer(dt)
-  if not soundPlayer or soundStatus ~= 'loading' then return end
-  soundWait = soundWait + dt
-  local ok, hasAudio = pcall(function() return soundPlayer:hasAudio() end)
-  if not ok then
-    soundStatus = 'ok' -- can't be checked on this CSP build, assume it works
-  elseif hasAudio then
-    soundStatus = 'ok'
-    ac.log('[MapTimer] sound loaded')
-  elseif soundWait > 20 then
-    soundStatus = 'failed'
-    ac.warn('[MapTimer] sound did not load after 20 seconds: ' .. soundUrl)
-  end
-end
-
 local function tick()
   local total = getTotalSeconds()
   state.total = total
@@ -348,7 +213,7 @@ local function tick()
   local threshold = cfg.WARNING_SECONDS
 
   -- Only play when the countdown actually crosses the threshold, so players who
-  -- join with less than a minute left don't get the sound the moment they load in.
+  -- join with less than 2 minutes left don't get the sound the moment they load in.
   if state.last and state.last > threshold and remaining <= threshold and remaining > 0 then
     playWarning()
   end
@@ -366,71 +231,34 @@ local function textCentered(text, fontSize, y, color, width)
   ui.dwriteDrawText(text, fontSize, vec2((width - size.x) / 2, y), color)
 end
 
--- Rounded rectangle helpers; fall back to square corners if a CSP build lacks an option.
-local function fillRounded(p1, p2, color, rounding, flags)
-  local ok = pcall(function()
-    if flags then ui.drawRectFilled(p1, p2, color, rounding, flags) else ui.drawRectFilled(p1, p2, color, rounding) end
-  end)
-  if not ok then ui.drawRectFilled(p1, p2, color) end
-end
-
-local function imageRounded(source, size, uv1, uv2, color, rounding)
-  local ok = pcall(ui.drawImageRounded, source, vec2(0, 0), size, color, uv1, uv2, rounding)
-  if not ok then ui.drawImage(source, vec2(0, 0), size, color, uv1, uv2) end
-end
-
 local function drawBackground(size)
-  local rounding = 16 * live.scale
+  -- solid base so the panel is readable even if the image is missing or still loading
+  ui.drawRectFilled(vec2(0, 0), size, rgbm(0.05, 0.05, 0.08, 0.92))
 
-  -- base so the panel is readable even if the image is missing or still loading
-  fillRounded(vec2(0, 0), size, rgbm(0.05, 0.05, 0.08, 0.85 * opacity), rounding)
-
-  local candidates = {}
-  if backgroundUrl ~= '' then candidates[#candidates + 1] = backgroundUrl end
-  if assetsFolder then candidates[#candidates + 1] = assetsFolder .. '/background.png' end
-  if #candidates == 0 then
-    bgStatus = 'none'
-    return
+  local source = nil
+  if cfg.BACKGROUND_URL and cfg.BACKGROUND_URL ~= '' then
+    source = cfg.BACKGROUND_URL
+  elseif assetsFolder and io.fileExists(assetsFolder .. '/background.png') then
+    source = assetsFolder .. '/background.png'
   end
 
-  bgFirstTry = bgFirstTry or os.clock()
-  local drawn = false
-
-  for _, source in ipairs(candidates) do
-    local okImg, imgErr = pcall(function()
-      local okSize, imgSize = pcall(ui.imageSize, source)
-      local loaded = okSize and imgSize and imgSize.x > 0 and imgSize.y > 0
-
-      if loaded and not drawn then
-        -- "cover" fit: fill the panel and crop the overflow instead of stretching
-        local uv1, uv2 = vec2(0, 0), vec2(1, 1)
-        local panelAspect = size.x / size.y
-        local imgAspect = imgSize.x / imgSize.y
-        if imgAspect > panelAspect then
-          local w = panelAspect / imgAspect
-          uv1.x, uv2.x = (1 - w) / 2, 1 - (1 - w) / 2
-        else
-          local h = imgAspect / panelAspect
-          uv1.y, uv2.y = (1 - h) / 2, 1 - (1 - h) / 2
-        end
-        imageRounded(source, size, uv1, uv2, rgbm(1, 1, 1, opacity), rounding)
-        fillRounded(vec2(0, 0), size, rgbm(0, 0, 0, cfg.BG_DARKEN * opacity), rounding)
-        drawn = true
-      elseif not loaded then
-        -- nearly invisible draw, just so the image keeps being requested until it arrives
-        ui.drawImage(source, vec2(0, 0), size, rgbm(1, 1, 1, 0.02))
+  if source then
+    -- "cover" fit: fill the panel and crop the overflow instead of stretching
+    local uv1, uv2 = vec2(0, 0), vec2(1, 1)
+    local okSize, imgSize = pcall(ui.imageSize, source)
+    if okSize and imgSize and imgSize.x > 0 and imgSize.y > 0 then
+      local panelAspect = size.x / size.y
+      local imgAspect = imgSize.x / imgSize.y
+      if imgAspect > panelAspect then
+        local w = panelAspect / imgAspect
+        uv1.x, uv2.x = (1 - w) / 2, 1 - (1 - w) / 2
+      else
+        local h = imgAspect / panelAspect
+        uv1.y, uv2.y = (1 - h) / 2, 1 - (1 - h) / 2
       end
-    end)
-    if not okImg then warnOnce('bg:' .. source, 'could not draw background image "' .. source .. '": ' .. tostring(imgErr)) end
-  end
-
-  if drawn then
-    bgStatus = 'ok'
-  elseif os.clock() - bgFirstTry > 12 then
-    bgStatus = 'failed'
-    warnOnce('bgfail', 'background image did not load after 12 seconds: ' .. (candidates[1] or ''))
-  else
-    bgStatus = 'loading'
+    end
+    ui.drawImage(source, vec2(0, 0), size, rgbm.colors.white, uv1, uv2)
+    ui.drawRectFilled(vec2(0, 0), size, rgbm(0, 0, 0, cfg.BG_DARKEN))
   end
 end
 
@@ -453,9 +281,6 @@ local function handleMouse(size, screen, hovered)
     end
     if ui.mouseClicked(ui.MouseButton.Left) then
       if overGrip then resizing = true else dragging = true end
-    end
-    if ui.mouseClicked(ui.MouseButton.Right) then
-      playWarning() -- test the sound
     end
 
     local wheel = ui.mouseWheel()
@@ -484,38 +309,17 @@ local function handleMouse(size, screen, hovered)
   return overGrip
 end
 
-local function getProblem()
-  if bgStatus == 'failed' then
-    return 'Background not loading: check the link (must be a direct image link)'
-  end
-  if soundStatus == 'failed' then
-    return 'Sound not loaded: see the [MapTimer] lines in the CSP log'
-  end
-  return nil
-end
-
 local function drawHoverOverlay(size, accent, overGrip)
   local s = live.scale
 
-  local rounding = 16 * s
-
   -- outline
-  local okRect = pcall(ui.drawRect, vec2(1, 1), size - 1, accent, rounding)
-  if not okRect then ui.drawRect(vec2(1, 1), size - 1, accent) end
+  ui.drawRect(vec2(1, 1), size - 1, accent)
 
-  -- help strip along the bottom (with a problem line on top when something failed to load)
-  local problem = getProblem()
-  local stripH = (problem and 34 or 20) * s
-  local bottomFlags = nil
-  pcall(function() bottomFlags = ui.CornerFlags.Bottom end)
-  fillRounded(vec2(0, size.y - stripH), size, rgbm(0, 0, 0, 0.75), rounding, bottomFlags)
-  local y = size.y - stripH + 4 * s
-  if problem then
-    textCentered(problem, 9 * s, y, rgbm(1, 0.45, 0.35, 1), size.x)
-    y = y + 13 * s
-  end
-  textCentered('Drag: move | Scroll/corner: size | Dbl-click: reset | Right-click: test sound',
-    9 * s, y, rgbm(0.9, 0.9, 0.9, 1), size.x)
+  -- help strip along the bottom
+  local stripH = 20 * s
+  ui.drawRectFilled(vec2(0, size.y - stripH), size, rgbm(0, 0, 0, 0.7))
+  textCentered('Drag: move   |   Scroll / corner: size   |   Double-click: reset',
+    10 * s, size.y - stripH + 4 * s, rgbm(0.9, 0.9, 0.9, 1), size.x)
 
   -- resize grip in the bottom-right corner
   local c = (overGrip or resizing) and rgbm.colors.white or accent
@@ -539,8 +343,7 @@ local function drawPanel()
   ui.transparentWindow('mapTimerPanel', pos, size, true, true, function()
     ui.pushDWriteFont(cfg.FONT)
 
-    local okBg, bgErr = pcall(drawBackground, size)
-    if not okBg then warnOnce('bgpanel', 'background failed: ' .. tostring(bgErr)) end
+    drawBackground(size)
 
     local accent = cfg.ACCENT_COLOR
     local remaining = state.remaining
@@ -559,7 +362,7 @@ local function drawPanel()
     ui.drawRectFilled(vec2(size.x * 0.25, 34 * s), vec2(size.x * 0.75, 36 * s), accent)
 
     -- label
-    local label = ended and 'MAP ENDED' or 'MAP ENDS IN'
+    local label = ended and 'MAP SWITCHING' or 'MAP SWITCHES IN'
     textCentered(label, 12 * s, 42 * s, rgbm(0.85, 0.85, 0.85, 1), size.x)
 
     -- timer (pulses red once the warning time is reached)
@@ -582,17 +385,11 @@ local function drawPanel()
         inWarning and rgbm(1, 0.25, 0.2, 1) or accent)
     end
 
-    -- mouse: move / resize / reset / test sound
-    local okMouse, mouseErr = pcall(function()
-      local hovered = ui.windowHovered()
-      local overGrip = handleMouse(size, screen, hovered)
-      if hovered or dragging or resizing then
-        drawHoverOverlay(size, accent, overGrip)
-      end
-    end)
-    if not okMouse then
-      dragging, resizing = false, false
-      warnOnce('mouse', 'mouse handling failed: ' .. tostring(mouseErr))
+    -- mouse: move / resize / reset
+    local hovered = ui.windowHovered()
+    local overGrip = handleMouse(size, screen, hovered)
+    if hovered or dragging or resizing then
+      drawHoverOverlay(size, accent, overGrip)
     end
 
     ui.popDWriteFont()
@@ -610,7 +407,6 @@ end
 
 function script.update(dt)
   tick()
-  checkSoundPlayer(dt)
 
   -- save a moment after the player stops scrolling to resize
   if saveTimer > 0 and not dragging and not resizing then
