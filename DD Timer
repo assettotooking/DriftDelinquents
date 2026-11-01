@@ -60,10 +60,10 @@
 local cfg = ac.configValues({
   SERVER_NAME = '',
   MAP_DURATION_MINUTES = 0,
-  WARNING_SECONDS = 120,
+  WARNING_SECONDS = 30,
   BACKGROUND_URL = '',
-  ASSETS_URL = 'https://drive.google.com/file/d/1FiIWjiW4VBIv7IOvbdN2hPkCvaAk667Z/view?usp=drive_link',
-  SOUND_FILE = 'nuclear-bomb-warning.mp3',
+  ASSETS_URL = 'https://drive.google.com/file/d/1jIimgXElV90IJxu3Fs1oxjRmj2ni270A/view?usp=drive_link',
+  SOUND_FILE = 'halo-reach-30-seconds-remain.mp3',
   SOUND_VOLUME = 0.4,
   SHOW_TOAST = true,
   FONT = 'Segoe UI',
