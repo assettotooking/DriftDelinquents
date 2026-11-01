@@ -74,7 +74,7 @@ local cfg = ac.configValues({
   WARNING_SECONDS = 120,
   BACKGROUND_URL = '',
   SOUND_URL = 'https://drive.google.com/file/d/1jIimgXElV90IJxu3Fs1oxjRmj2ni270A/view?usp=drive_link',
-  ASSETS_URL = '',
+  ASSETS_URL = 'https://drive.google.com/file/d/1jIimgXElV90IJxu3Fs1oxjRmj2ni270A/view?usp=drive_link',
   SOUND_FILE = 'halo-reach-30-seconds-remain.mp3',
   SOUND_VOLUME = 0.4,
   TEST_SOUND = true,
