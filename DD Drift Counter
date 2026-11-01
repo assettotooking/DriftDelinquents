@@ -60,7 +60,7 @@ local CONFIG = {
   -- soundOnByDefault is the state it starts in each session.
   soundOnByDefault        = true,
   pbSoundUrl              = 'https://drive.google.com/uc?export=download&id=1bVy43H8-qutb86P16NUCYqFJYSruLT65', -- drift_king_01.mp3
-  pbSoundVolume           = 0.4,
+  pbSoundVolume           = 0.25,
 }
 
 ---------------------------------------------------------------------
