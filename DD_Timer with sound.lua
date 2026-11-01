@@ -69,7 +69,7 @@ local cfg = ac.configValues({
   MAP_DURATION_MINUTES = 0,
   WARNING_SECONDS = 30,
   BACKGROUND_URL = '',
-  SOUND_URL = 'https://raw.githubusercontent.com/assettotooking/DriftDelinquents/refs/heads/main/halo-reach-30-seconds-remain.mp3',
+  SOUND_URL = 'https://drive.google.com/file/d/1jIimgXElV90IJxu3Fs1oxjRmj2ni270A/view?usp=sharing',
   ASSETS_URL = '',
   SOUND_VOLUME = 0.4,
   TEST_SOUND = false,
