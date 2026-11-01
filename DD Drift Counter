@@ -1,834 +1,480 @@
 --[[
-  Drift Delinquents Drift Points
-  Made by YTTH
+  MAP TIMER  -  CSP online script for AssettoServer
+  Shows a countdown until the map ends, a server name, a custom background,
+  and plays a sound when the warning time (default 30 seconds) is reached.
 
-  Hover the counter with the mouse to see the keybinds.
+  MOVE / RESIZE (each player, in game)
+  Hover the panel with the mouse cursor, then:
+    - Hold left mouse button and drag      -> move the panel
+    - Mouse wheel, or drag the bottom-right corner -> make it bigger / smaller
+    - Double-click                          -> reset to the default position/size
+  POS_X / POS_Y / SCALE below are only the defaults for players who haven't
+  moved it yet (and what double-click resets to).
 
-  Keys:  Ctrl+D   toggle UI
-         B        toggle MOVE MODE
-                    - drag the panel with the left mouse button
-                      (click on the panel to grab it, click elsewhere to pull it to the cursor)
-                    - arrow keys nudge it (hold to speed up)
-                    - Shift + arrow keys scale it (Up/Right = bigger, Down/Left = smaller)
-                    - press B again to lock it; position and size are saved
-         M        toggle sounds
-         Delete   re-orient car (below reorientMaxSpeed)
+  HOW TO ADD IT
+  1. Host this file somewhere with a direct link (e.g. your server's wwwroot
+     folder -> http://<ip>:<http port>/static/map_timer.lua, or a Pastebin raw link).
+  2. In your server's cfg/csp_extra_options.ini add:
+
+       [SCRIPT_MAPTIMER]
+       SCRIPT = "https://your-link/map_timer.lua"
+       SERVER_NAME = "My Server Name"
+       SOUND_URL = "https://your-link/warning.mp3"
+       SOUND_VOLUME = 0.4
+       WARNING_SECONDS = 30
+       TEST_SOUND = 0
+       MAP_DURATION_MINUTES = 0
+       BACKGROUND_URL = ""
+       SHOW_TOAST = 1
+       POS_X = 0.5
+       POS_Y = 0.03
+       SCALE = 1.0
+       BG_DARKEN = 0.45
+
+     Every setting is optional. Anything you leave out uses the default
+     written in the config table below.
+
+  SETTINGS
+  SERVER_NAME           Text shown at the top of the panel. Empty = real server name.
+  SOUND_URL             Link to the warning sound (mp3 / ogg / wav). It is played
+                        straight from the link with CSP's media player, the same way
+                        the Drift Counter plays its PB sound. You can paste:
+                          - a direct link to the file, or
+                          - a normal Google Drive share link (the file must be set
+                            to "Anyone with the link"), or
+                          - a normal Dropbox share link.
+                        Drive and Dropbox share links are converted automatically.
+  SOUND_VOLUME          0.0 - 1.0
+  WARNING_SECONDS       When the countdown reaches this, the sound plays (default 30;
+                        120 would be 2 minutes).
+  TEST_SOUND            1 = for testing: plays the sound about 3 seconds after you
+                        join and shows a pop-up. Set back to 0 for normal use.
+  MAP_DURATION_MINUTES  0 = use the session length from the server.
+                        Above 0 = use this many minutes instead (counted from the
+                        start of the session, so everyone sees the same time).
+  BACKGROUND_URL        Direct link to a PNG/JPG for the panel background. Leave
+                        empty to use background.png from ASSETS_URL, or a plain
+                        dark panel.
+  ASSETS_URL            (Optional) Direct link to a .zip containing background.png.
+  SHOW_TOAST            1 = also show a pop-up message at the warning time.
+  POS_X / POS_Y         Default panel position as a fraction of the screen
+                        (X = centre of the panel, Y = top edge).
+  SCALE                 Default size of the panel.
+  BG_DARKEN             0 - 1, how much the background image is darkened so the
+                        text stays readable.
 ]]
 
----------------------------------------------------------------------
--- Config
----------------------------------------------------------------------
-local CONFIG = {
-  startSpeed              = 30,    -- km/h needed before the script activates
-  requiredSpeed           = 25,    -- km/h; below this the slow timer runs
-  slowGraceSeconds        = 3,     -- seconds below requiredSpeed before the drift is cancelled
-  scoreScale              = 0.1,   -- multiplier on driftInstantPoints (0.5 = half the points at every multiplier)
-  maxMultiplier           = 50,   -- the multiplier, and what it pays, stops growing here
-  bankScoreOnCrash        = false, -- (only if collisionsInterrupt) true = a crash still counts towards your PB
-  outsideWarnCooldown     = 10,    -- seconds between "outside the zone" warnings
-  reorientMaxSpeed        = 15,    -- km/h
-  speedBarMax             = 130,   -- km/h shown at the right end of the speed bar
+local cfg = ac.configValues({
+  SERVER_NAME = '',
+  MAP_DURATION_MINUTES = 0,
+  WARNING_SECONDS = 30,
+  BACKGROUND_URL = '',
+  SOUND_URL = 'https://raw.githubusercontent.com/assettotooking/DriftDelinquents/refs/heads/main/halo-reach-30-seconds-remain.mp3',
+  ASSETS_URL = '',
+  SOUND_VOLUME = 0.4,
+  TEST_SOUND = false,
+  SHOW_TOAST = true,
+  FONT = 'Segoe UI',
+  POS_X = 0.95,
+  POS_Y = 0.02,
+  SCALE = 0.90,
+  BG_DARKEN = 0.45,
+  ACCENT_COLOR = rgbm(0.55, 0.15, 0.85, 1),
+})
 
-  -- Zones: wheels outside the allowed area
-  oneWheelGraceSeconds    = 1.5,   -- one wheel outside is tolerated this long (total, recovers when back inside)
-  multiWheelGraceSeconds  = 0.3,   -- two or more wheels outside are tolerated this long
+local sim = ac.getSim()
 
-  -- Collisions
-  collisionsInterrupt     = false, -- false = hitting something never ends your drift, resets your streak or costs points
-  collisionBridgeSeconds  = 1.5,   -- (when false) if the game's own drift detection drops out after a hit, hold your
-                                   --   points and streak for this long while waiting for it to come back
-  collisionLockoutSeconds = 2,     -- (when true) after a collision you can't score for this long (0 = off)
+local BASE_W, BASE_H = 380, 138
+local MIN_SCALE, MAX_SCALE = 0.4, 3.0
 
-  -- Airtime (estimated from the car's vertical acceleration, so it's an approximation)
-  airtimeMinSeconds       = 0.25,  -- free-fall needed before it counts as airtime (ignores bumps/kerbs)
-  airtimeGravityThreshold = 6,     -- m/s^2 of downward acceleration that counts as free-fall (gravity is 9.8)
-  airtimePenaltyPerSecond = 0,   -- fraction of your score lost per second in the air (0.5 = half)
-  airtimeCancelSeconds    = 1.5,   -- this long in the air throws the whole drift away (0 = never)
-
-  -- Tandem: the header says TANDEM instead of DRIFT while another driver is sliding alongside you.
-  -- (CSP has no tandem flag, so this is worked out from the other cars' position, speed and heading.)
-  tandemDistance          = 6,    -- m; another sliding car this close counts (0 = never show TANDEM)
-  tandemMinAngle          = 15,    -- degrees of slip for the other car to count as sliding
-  tandemMinSpeed          = 30,    -- km/h; the other car must be at least this fast
-  tandemGraceSeconds      = 2.0,   -- TANDEM sticks this long after the other car drops out
-
-  saveSettings            = true,  -- remember UI position, UI size and PB per track
-  fontName                = 'aventador',
-  uppercase               = true,  -- ALL CAPS, which suits thrash-style fonts
-
-  -- Sound played when you set a new PB. The M key turns it on/off in game;
-  -- soundOnByDefault is the state it starts in each session.
-  soundOnByDefault        = true,
-  pbSoundUrl              = 'https://drive.google.com/uc?export=download&id=1bVy43H8-qutb86P16NUCYqFJYSruLT65', -- drift_king_01.mp3
-  pbSoundVolume           = 0.25,
+local state = {
+  remaining = nil, -- seconds left, nil when unknown
+  total = nil,     -- total map length in seconds, nil when unknown
+  last = nil,      -- remaining value of the previous frame
 }
 
----------------------------------------------------------------------
--- Layout (unscaled units; everything is multiplied by the UI scale when drawn)
----------------------------------------------------------------------
-local PANEL_W, PANEL_H, PAD = 300, 132, 14
-local PILL_W, PILL_H = 76, 32
-local TOAST_H, TOAST_STEP = 28, 34
-local MARGIN = 10
-local MAX_MESSAGES = 4
+local assetsFolder = nil
+local drawUICalled = false
+local fallbackTimer = 0
+local testTimer = cfg.TEST_SOUND and 3 or nil
 
-local HELP_ROW = 18
-local HELP_ROWS = {
-  { 'CTRL + D',       'HIDE / SHOW UI' },
-  { 'B',              'MOVE MODE' },
-  { 'ARROWS',         'MOVE (IN MOVE MODE)' },
-  { 'SHIFT + ARROWS', 'SCALE (IN MOVE MODE)' },
-  { 'M',              'SOUNDS ON / OFF' },
-  { 'DELETE',         'RE-ORIENT CAR' },
-}
-local HELP_H = 24 + HELP_ROW * (#HELP_ROWS + 1) -- +1 row for the track line
+---------------------------------------------------------------------------
+-- Saved position / size (stored on the player's PC)
+---------------------------------------------------------------------------
 
-local WIN_W = PANEL_W + MARGIN * 2 + 120 -- extra width leaves room for toasts sliding in
-local WIN_H = MARGIN * 2 + PANEL_H + 12 + HELP_H + 4 + MAX_MESSAGES * TOAST_STEP
+-- No more permanent saving. Position/size only last for the current session.
+local live = { posX = cfg.POS_X, posY = cfg.POS_Y, scale = cfg.SCALE }
+local saveTimer = 0          -- kept only so the rest of the code doesn’t explode
+local dragging, resizing = false, false
 
-local PALETTE = {
-  green = { 0.30, 1.00, 0.50 },
-  amber = { 1.00, 0.72, 0.20 },
-  red   = { 1.00, 0.30, 0.30 },
-  gold  = { 1.00, 0.84, 0.20 },
-  ice   = { 0.65, 0.80, 1.00 },
-  grey  = { 0.55, 0.55, 0.60 },
-}
--- accent colour of a toast by mood: -1 warning, 0 info, 1 success (+confetti), 2 highlight
-local MOOD = { [-1] = PALETTE.red, [0] = PALETTE.ice, [1] = PALETTE.green, [2] = PALETTE.gold }
-
-local function rgba(c, a) return rgbm(c[1], c[2], c[3], a) end
-local function hsvColor(h, s, v, a) return rgbm.new(hsv(h, s, v):rgb(), a) end
-
----------------------------------------------------------------------
--- State
----------------------------------------------------------------------
-local driftPoints, driftPB, driftCombo = 0, 0, 1
-local wasDrifting = false
-
-local slowTimer, slowWarned = 0, false
-local outsideTimer, outsideWarnTimer = 0, 0
-local collisionTimer = 0
-local lastCollisionTime = -math.huge
-local comboOffset, lastCounter = 0, 1 -- keeps your streak if the game resets its own combo after a hit
-local airTimer, airWarned, prevVy, airSupported = 0, false, nil, nil
-local tandemTimer, tandemActive, tandemSupported = 0, false, nil
-
-local uptime = 0
-local welcomed = false
-
-local uiVisible = true
-local uiMoveMode = false
-local uiHovered = false
-
-local soundEnabled = CONFIG.soundOnByDefault
-
--- what the header shows (set every update)
-local statusText, statusColor = 'Drift', PALETTE.grey
-
--- animation values (smoothed in updateEffects)
-local comboHue = 0
-local activeFade = 0   -- 0 idle .. 1 drifting
-local helpAlpha = 0    -- keybind card fades in while hovering / in move mode
-local shownPoints = 0  -- rolling score counter
-local speedShown = 0
-local pbFlash = 0      -- 1 right after a new PB, fades out
-
-local keyLatch = {}
-
--- Rising-edge detector so a held key only triggers once.
-local function justPressed(id, isDown)
-  local pressed = isDown and not keyLatch[id]
-  keyLatch[id] = isDown
-  return pressed
+local function savePosition()
+  -- intentionally empty – we don’t want to remember your shitty placement
 end
 
-local function formatInt(n)
-  local s = tostring(math.floor(n))
-  s = s:reverse():gsub('(%d%d%d)', '%1,'):reverse()
-  return (s:gsub('^,', ''))
+local function resetPosition()
+  live.posX, live.posY, live.scale = cfg.POS_X, cfg.POS_Y, cfg.SCALE
 end
 
----------------------------------------------------------------------
--- Saved settings: UI position, UI scale, and PB per track
----------------------------------------------------------------------
-local function getTrackId()
-  local function try(fn)
-    local ok, v = pcall(fn)
-    if ok and type(v) == 'string' and v ~= '' then return v end
-  end
-  return try(function() return ac.getTrackFullID('_') end)
-      or try(function() return ac.getTrackID() end)
-      or 'unknown'
-end
+---------------------------------------------------------------------------
+-- Warning sound (played from SOUND_URL with CSP's media player)
+---------------------------------------------------------------------------
 
-local TRACK_ID = getTrackId()
-local TRACK_LABEL = #TRACK_ID > 26 and (TRACK_ID:sub(1, 25) .. '...') or TRACK_ID
-local PB_KEY = 'pb_' .. (TRACK_ID:gsub('[^%w]', '_')):sub(1, 60)
+-- Turns normal share links into direct download links.
+local function directLink(url)
+  if not url or url == '' then return url end
 
--- Persistent storage if CSP allows it here; otherwise a plain table, so everything
--- still works for the session (it just isn't remembered after a restart).
-local store = { posX = 0, posY = 0, scale = 1, [PB_KEY] = 0 }
-if CONFIG.saveSettings and ac.storage then
-  local ok, s = pcall(ac.storage, { posX = 0, posY = 0, scale = 1, [PB_KEY] = 0 })
-  local kind = type(s)
-  if ok and (kind == 'table' or kind == 'userdata')
-     and type(s.posX) == 'number' and type(s.posY) == 'number'
-     and type(s.scale) == 'number' and type(s[PB_KEY]) == 'number' then
-    store = s
-  end
-end
-
-local function storeSet(key, value)
-  pcall(function() store[key] = value end)
-end
-
-local SCALE_MIN, SCALE_MAX, SCALE_RATE = 0.5, 2.0, 0.6 -- scale change per second while Shift+arrows is held
-local uiScale = math.max(SCALE_MIN, math.min(SCALE_MAX, store.scale))
-local uiPos = vec2(store.posX, store.posY)
-driftPB = store[PB_KEY]
-
-local function savePrefs()
-  local x, y = math.floor(uiPos.x + 0.5), math.floor(uiPos.y + 0.5)
-  local sc = math.floor(uiScale * 100 + 0.5) / 100
-  if store.posX ~= x then storeSet('posX', x) end
-  if store.posY ~= y then storeSet('posY', y) end
-  if store.scale ~= sc then storeSet('scale', sc) end
-end
-
----------------------------------------------------------------------
--- Moving & scaling the UI in game
----------------------------------------------------------------------
-local NUDGE_SLOW, NUDGE_FAST = 150, 800 -- px/s with the arrow keys; ramps up the longer you hold
-local moveWasOn, mouseWasDown = false, false
-local grab = vec2(0, 0)
-local nudgeHold = 0
-local prefsDirty = false
-local posChecked = false
-
--- Keep the panel on screen (also fixes a saved position after a resolution change).
-local function clampPos()
-  local ok, ws = pcall(function() return ac.getUiState().windowSize end)
-  if not ok or not ws then return end
-  local m = MARGIN * uiScale
-  uiPos.x = math.max(-m, math.min(ws.x - PANEL_W * uiScale - m, uiPos.x))
-  uiPos.y = math.max(-m, math.min(ws.y - PANEL_H * uiScale - m, uiPos.y))
-end
-
-local function keyDown(k)
-  return k ~= nil and ac.isKeyDown(k) or false
-end
-
-local function updateMove(dt)
-  if not posChecked then
-    posChecked = true
-    clampPos()
+  -- Google Drive: /file/d/<id>/view, /open?id=<id>, /uc?id=<id>
+  local id = url:match('drive%.google%.com/file/d/([%w_%-]+)')
+          or url:match('drive%.google%.com/open%?id=([%w_%-]+)')
+          or url:match('drive%.google%.com/uc%?[^%s]-id=([%w_%-]+)')
+  if id then
+    return 'https://drive.google.com/uc?export=download&id=' .. id
   end
 
-  -- Is the mouse over the counter? (drives the keybind card)
-  uiHovered = false
-  if uiVisible then
-    local mouse = ui.mousePos()
-    local m = MARGIN * uiScale
-    local x0, y0 = uiPos.x + m, uiPos.y + m
-    uiHovered = mouse.x >= x0 and mouse.x <= x0 + PANEL_W * uiScale
-            and mouse.y >= y0 and mouse.y <= y0 + PANEL_H * uiScale
-  end
-
-  -- Leaving move mode: lock in and save.
-  if moveWasOn and not uiMoveMode then
-    clampPos()
-    savePrefs()
-    prefsDirty, mouseWasDown, nudgeHold = false, false, 0
-  end
-  moveWasOn = uiMoveMode
-  if not uiMoveMode then return end
-
-  local active = false
-
-  -- Mouse: pressing on the panel grabs it where you clicked; pressing anywhere
-  -- else pulls it to the cursor (so it can't be "missed").
-  local down = ui.mouseDown(ui.MouseButton.Left) and true or false
-  if down then
-    active = true
-    prefsDirty = true
-    local mouse = ui.mousePos()
-    local m = MARGIN * uiScale
-    if not mouseWasDown then
-      grab = uiHovered and (mouse - (uiPos + vec2(m, m)))
-                        or vec2(PANEL_W * uiScale / 2, PANEL_H * uiScale / 2)
-    end
-    uiPos = mouse - grab - vec2(m, m)
-    clampPos()
-  end
-  mouseWasDown = down
-
-  -- Arrow keys move the UI; hold Shift and they scale it instead.
-  -- (Only active in move mode, so they don't clash with steering.)
-  local K = ac.KeyIndex
-  local ax = (keyDown(K.Right) and 1 or 0) - (keyDown(K.Left) and 1 or 0)
-  local ay = (keyDown(K.Down) and 1 or 0) - (keyDown(K.Up) and 1 or 0)
-  if ax ~= 0 or ay ~= 0 then
-    active = true
-    prefsDirty = true
-    if keyDown(K.Shift) then
-      nudgeHold = 0
-      uiScale = math.max(SCALE_MIN, math.min(SCALE_MAX, uiScale + (ax - ay) * SCALE_RATE * dt))
-    else
-      nudgeHold = nudgeHold + dt
-      local speed = NUDGE_SLOW + (NUDGE_FAST - NUDGE_SLOW) * math.min(1, nudgeHold / 1.5)
-      uiPos.x = uiPos.x + ax * speed * dt
-      uiPos.y = uiPos.y + ay * speed * dt
-    end
-    clampPos()
-  else
-    nudgeHold = 0
-  end
-
-  if prefsDirty and not active then
-    savePrefs()
-    prefsDirty = false
-  end
-end
-
----------------------------------------------------------------------
--- Text helpers (DirectWrite, so any size renders crisply). Sizes are
--- unscaled; the UI scale is applied here.
----------------------------------------------------------------------
-local function styled(str)
-  return CONFIG.uppercase and str:upper() or str
-end
-
-local function drawText(str, size, pos, color)
-  ui.dwriteDrawText(styled(str), size * uiScale, pos, color)
-end
-
-local function measure(str, size)
-  return ui.measureDWriteText(styled(str), size * uiScale)
-end
-
----------------------------------------------------------------------
--- Messages & confetti (positions are relative to the panel's top-left, unscaled)
----------------------------------------------------------------------
-local messages, glitter = {}, {}
-
-local function spawnGlitter(center, count)
-  for _ = 1, count do
-    local dir = vec2(math.random() - 0.5, math.random() - 0.5)
-    glitter[#glitter + 1] = {
-      color = rgbm.new(hsv(math.random() * 360, 1, 1):rgb(), 1),
-      pos = center + dir * vec2(40, 20),
-      velocity = dir:normalize():scale(0.2 + math.random()),
-      life = 0.5 + 0.5 * math.random(),
-    }
-  end
-end
-
--- mood: -1 = warning, 0 = info, 1 = success (+confetti), 2 = highlight
-local function addMessage(text, mood)
-  table.insert(messages, 1, { text = text, age = 0, currentPos = 1, targetPos = 1, mood = mood })
-  if #messages > MAX_MESSAGES then table.remove(messages) end
-  for i, m in ipairs(messages) do m.targetPos = i end
-  if mood == 1 then spawnGlitter(vec2(PANEL_W * 0.35, 62), 60) end
-end
-
-local function updateEffects(dt)
-  comboHue = (comboHue + dt * 10 * driftCombo) % 360
-  activeFade = math.applyLag(activeFade, wasDrifting and 1 or 0, 0.9, dt)
-  helpAlpha = math.applyLag(helpAlpha, (uiHovered or uiMoveMode) and 1 or 0, 0.85, dt)
-  shownPoints = math.applyLag(shownPoints, driftPoints, 0.85, dt)
-  speedShown = math.applyLag(speedShown, ac.getCarState(1).speedKmh, 0.8, dt)
-  pbFlash = math.max(0, pbFlash - dt * 0.7)
-
-  for _, m in ipairs(messages) do
-    m.age = m.age + dt
-    m.currentPos = math.applyLag(m.currentPos, m.targetPos, 0.8, dt)
-  end
-
-  local step = dt * 60 -- keeps particle speed independent of frame rate
-  for i = #glitter, 1, -1 do
-    local g = glitter[i]
-    g.pos:add(g.velocity * step)
-    g.velocity.y = g.velocity.y + 0.02 * step
-    g.life = g.life - dt
-    g.color.mult = math.saturate(g.life * 4)
-    if g.life < 0 then
-      glitter[i] = glitter[#glitter]
-      glitter[#glitter] = nil
+  -- Dropbox: make sure it ends up as dl=1
+  if url:find('dropbox.com', 1, true) then
+    if url:find('dl=0', 1, true) then
+      url = (url:gsub('dl=0', 'dl=1'))
+    elseif not url:find('dl=1', 1, true) then
+      url = url .. (url:find('?', 1, true) and '&' or '?') .. 'dl=1'
     end
   end
+
+  return url
 end
 
----------------------------------------------------------------------
--- Sound: a one-shot clip when you set a new PB (M turns it on/off in game).
--- Everything is wrapped in pcall so a bad link or a player hiccup can never
--- break the script (worst case: you just don't hear it).
----------------------------------------------------------------------
-local pbPlayer = nil
-if CONFIG.pbSoundUrl then
-  local ok, player = pcall(function()
-    local p = ui.MediaPlayer()
-    p:setSource(CONFIG.pbSoundUrl)
-    p:setVolume(CONFIG.pbSoundVolume)
-    p:setLooping(false)
-    return p
-  end)
-  if ok then pbPlayer = player end
-end
-
-local function playPbSound()
-  if not pbPlayer or not soundEnabled then return end
-  pcall(function()
-    pbPlayer:setCurrentTime(0) -- restart from the beginning if it is still playing
-    pbPlayer:play()
-  end)
-end
-
-local function stopPbSound()
-  if not pbPlayer then return end
-  pcall(function() pbPlayer:pause() end)
-end
-
----------------------------------------------------------------------
--- Drift lifecycle
----------------------------------------------------------------------
--- bank = true  -> a score above this track's PB becomes the new PB (and is saved)
--- bank = false -> the drift is simply thrown away
-local function endDrift(bank)
-  if bank and driftPoints > driftPB then
-    driftPB = driftPoints
-    pbFlash = 1
-    storeSet(PB_KEY, math.floor(driftPB))
-    addMessage('New PB: ' .. formatInt(driftPB) .. ' pts', 1)
-    playPbSound()
-  end
-  driftPoints = 0
-  driftCombo = 1
-  comboOffset, lastCounter = 0, 1
-  wasDrifting = false
-end
-
----------------------------------------------------------------------
--- Airtime estimate: a car in the air is in free-fall, so its vertical
--- acceleration is close to -g. Sustained free-fall counts as airtime.
----------------------------------------------------------------------
-local function updateAirtime(car, dt)
-  if airSupported == nil then
-    airSupported = pcall(function() return car.velocity.y end)
-  end
-  if not airSupported or dt < 0.002 then return false end
-
-  local vy = car.velocity.y
-  local freefall = prevVy ~= nil and (vy - prevVy) / dt < -CONFIG.airtimeGravityThreshold
-  prevVy = vy
-
-  if freefall then
-    airTimer = airTimer + dt
-  else
-    airTimer = math.max(0, airTimer - dt * 3)
-  end
-  return airTimer > CONFIG.airtimeMinSeconds
-end
-
----------------------------------------------------------------------
--- Tandem: another driver sliding close to you and heading the same way.
--- Slip angle = angle between a car's heading and the way it is actually moving.
----------------------------------------------------------------------
-local TANDEM_MAX_ANGLE = 110 -- beyond this the other car is reversing or spinning, not drifting alongside
-
-local function updateTandem(car, dt)
-  if tandemSupported == nil then
-    tandemSupported = pcall(function()
-      local p, v, l = car.position, car.velocity, car.look
-      return p.x + p.z + v.x + v.z + l.x + l.z
+-- Writes to the CSP log, and (with TEST_SOUND = 1) also shows a pop-up in game.
+local function reportSound(ok, message)
+  if ok then ac.log('[MapTimer] ' .. message) else ac.warn('[MapTimer] ' .. message) end
+  if cfg.TEST_SOUND then
+    pcall(function()
+      local icon = ok and (ui.Icons.Confirm or ui.Icons.Warning) or ui.Icons.Warning
+      ui.toast(icon, 'Map timer sound: ' .. message)
     end)
   end
-
-  local found = false
-  if wasDrifting and tandemSupported and CONFIG.tandemDistance > 0 then
-    local mx, mz = car.position.x, car.position.z
-    local mvx, mvz = car.velocity.x, car.velocity.z
-    local maxDistSq = CONFIG.tandemDistance * CONFIG.tandemDistance
-    local minSpeed = CONFIG.tandemMinSpeed / 3.6
-
-    for i = 2, ac.getSim().carsCount do -- car 1 is you
-      local other = ac.getCarState(i)
-      if other then
-        local dx, dz = other.position.x - mx, other.position.z - mz
-        if dx * dx + dz * dz <= maxDistSq then
-          local vx, vz = other.velocity.x, other.velocity.z
-          local sameWay = vx * mvx + vz * mvz > 0
-          if sameWay and math.sqrt(vx * vx + vz * vz) >= minSpeed then
-            local lx, lz = other.look.x, other.look.z
-            local angle = math.deg(math.abs(math.atan2(lx * vz - lz * vx, lx * vx + lz * vz)))
-            if angle >= CONFIG.tandemMinAngle and angle <= TANDEM_MAX_ANGLE then
-              found = true
-              break
-            end
-          end
-        end
-      end
-    end
-  end
-
-  if found then
-    tandemTimer = CONFIG.tandemGraceSeconds
-  elseif wasDrifting then
-    tandemTimer = math.max(0, tandemTimer - dt)
-  else
-    tandemTimer = 0
-  end
-  tandemActive = tandemTimer > 0
 end
 
----------------------------------------------------------------------
--- CSP callbacks
----------------------------------------------------------------------
-function script.prepare(dt)
-  return ac.getCarState(1).speedKmh > CONFIG.startSpeed
-end
+-- Same setup the Drift Counter uses for its PB sound.
+local soundPlayer = nil
 
-function script.update(dt)
-  uptime = uptime + dt
-  local car = ac.getCarState(1)
-
-  -- Input -----------------------------------------------------------
-  if justPressed('toggleUi', ac.isKeyDown(ac.KeyIndex.Control) and ac.isKeyDown(ac.KeyIndex.D)) then
-    uiVisible = not uiVisible
-    if not uiVisible then uiMoveMode = false end -- never leave move mode on while hidden
-  end
-
-  -- (ignored while the UI is hidden, so you can't end up in an invisible move mode)
-  if justPressed('moveMode', ac.isKeyDown(ac.KeyIndex.B)) and uiVisible then
-    uiMoveMode = not uiMoveMode
-    if uiMoveMode then
-      addMessage('Move mode: drag, arrows, shift+arrows', 2)
+do
+  local url = directLink(cfg.SOUND_URL)
+  if url and url ~= '' then
+    local ok, player = pcall(function()
+      local p = ui.MediaPlayer()
+      p:setSource(url)
+      p:setVolume(cfg.SOUND_VOLUME)
+      p:setLooping(false)
+      return p
+    end)
+    if ok and player then
+      soundPlayer = player
+      ac.log('[MapTimer] sound player ready for ' .. url)
     else
-      addMessage('UI position saved', 0)
+      reportSound(false, 'could not create the sound player: ' .. tostring(player))
     end
   end
+end
 
-  if justPressed('sound', ac.isKeyDown(ac.KeyIndex.M)) then
-    soundEnabled = not soundEnabled
-    if not soundEnabled then stopPbSound() end -- cut it off if it is mid-play
-    addMessage(soundEnabled and 'Sounds on' or 'Sounds off', 0)
+local function playSound()
+  if not soundPlayer then
+    ac.warn('[MapTimer] no sound player (check SOUND_URL)')
+    return false
   end
+  local ok, err = pcall(function()
+    soundPlayer:setVolume(cfg.SOUND_VOLUME)
+    soundPlayer:setCurrentTime(0) -- restart from the beginning if it is still playing
+    soundPlayer:play()
+  end)
+  if not ok then ac.warn('[MapTimer] could not play the sound: ' .. tostring(err)) end
+  return ok
+end
 
-  if not welcomed then
-    welcomed = true
-    addMessage(ac.getCarName(0), 0)
-    addMessage('Made by YTTH', 2)
-    addMessage('CTRL + D to toggle UI', -1)
-    addMessage('Hover the counter for keybinds', -1)
+---------------------------------------------------------------------------
+-- Optional background zip (ASSETS_URL)
+---------------------------------------------------------------------------
+
+do
+  local url = directLink(cfg.ASSETS_URL)
+  if url and url ~= '' then
+    local ok, err = pcall(function()
+      web.loadRemoteAssets(url, function(downloadErr, folder)
+        if downloadErr or not folder then
+          ac.warn('[MapTimer] could not download assets: ' .. tostring(downloadErr))
+          return
+        end
+        assetsFolder = folder
+      end)
+    end)
+    if not ok then ac.warn('[MapTimer] asset loading failed: ' .. tostring(err)) end
   end
+end
 
-  if car.engineLifeLeft < 1 then
-    endDrift(false)
+local function playWarning()
+  playSound()
+  if cfg.SHOW_TOAST then
+    pcall(function()
+      local mins = math.floor(cfg.WARNING_SECONDS / 60)
+      local text = mins >= 1 and ('Map switches in ' .. mins .. (mins == 1 and ' minute' or ' minutes'))
+        or ('Map switches in ' .. cfg.WARNING_SECONDS .. ' seconds')
+      ui.toast(ui.Icons.Warning, text)
+    end)
+  end
+end
+
+---------------------------------------------------------------------------
+-- Time keeping
+---------------------------------------------------------------------------
+
+local function getTotalSeconds()
+  local manual = tonumber(cfg.MAP_DURATION_MINUTES) or 0
+  if manual > 0 then return manual * 60 end
+
+  local ok, mins = pcall(function()
+    return ac.getSession(sim.currentSessionIndex).durationMinutes
+  end)
+  if ok and mins and mins > 0 then return mins * 60 end
+  return nil
+end
+
+local function formatTime(seconds)
+  seconds = math.max(0, math.ceil(seconds))
+  local h = math.floor(seconds / 3600)
+  local m = math.floor((seconds % 3600) / 60)
+  local s = seconds % 60
+  if h > 0 then return string.format('%d:%02d:%02d', h, m, s) end
+  return string.format('%02d:%02d', m, s)
+end
+
+local function tick()
+  local total = getTotalSeconds()
+  state.total = total
+  if not total then
+    state.remaining = nil
+    state.last = nil
     return
   end
 
-  if justPressed('reorient', ac.isKeyDown(ac.KeyIndex.Delete)) and car.speedKmh < CONFIG.reorientMaxSpeed then
-    local fwd = ac.getCameraForward()
-    physics.setCarPosition(0, car.position, vec3(fwd.x, 0, fwd.z):normalize()) -- keep the car level
+  local elapsed = math.max(0, (sim.currentSessionTime or 0) / 1000)
+  local remaining = math.max(0, total - elapsed)
+  local threshold = cfg.WARNING_SECONDS
+
+  -- Only play when the countdown actually crosses the threshold, so players who
+  -- join with less than 2 minutes left don't get the sound the moment they load in.
+  if state.last and state.last > threshold and remaining <= threshold and remaining > 0 then
+    playWarning()
   end
 
-  -- Slow-speed timer ------------------------------------------------
-  if car.speedKmh < CONFIG.requiredSpeed then
-    slowTimer = slowTimer + dt
-    if driftPoints > 0 and not slowWarned then
-      slowWarned = true
-      addMessage(CONFIG.slowGraceSeconds .. ' seconds until score reset!', -1)
-    end
-  else
-    slowTimer, slowWarned = 0, false
+  state.last = remaining
+  state.remaining = remaining
+end
+
+---------------------------------------------------------------------------
+-- Drawing
+---------------------------------------------------------------------------
+
+local function textCentered(text, fontSize, y, color, width)
+  local size = ui.measureDWriteText(text, fontSize)
+  ui.dwriteDrawText(text, fontSize, vec2((width - size.x) / 2, y), color)
+end
+
+local function drawBackground(size)
+  -- solid base so the panel is readable even if the image is missing or still loading
+  ui.drawRectFilled(vec2(0, 0), size, rgbm(0.05, 0.05, 0.08, 0.0))
+
+  local source = nil
+  if cfg.BACKGROUND_URL and cfg.BACKGROUND_URL ~= '' then
+    source = cfg.BACKGROUND_URL
+  elseif assetsFolder and io.fileExists(assetsFolder .. '/background.png') then
+    source = assetsFolder .. '/background.png'
   end
 
-  -- Wheels outside the zone: more grace for one wheel than for two or more.
-  -- The timer builds up while outside and drains while inside.
-  local wheelsOut = car.wheelsOutside
-  if wheelsOut > 0 then
-    outsideTimer = outsideTimer + dt
-  else
-    outsideTimer = math.max(0, outsideTimer - dt)
-  end
-  local outsideLimit = wheelsOut >= 2 and CONFIG.multiWheelGraceSeconds or CONFIG.oneWheelGraceSeconds
-  local outsideViolation = wheelsOut > 0 and outsideTimer > outsideLimit
-
-  outsideWarnTimer = math.max(0, outsideWarnTimer - dt)
-  if wheelsOut > 0 and wasDrifting and outsideWarnTimer == 0 then
-    addMessage(wheelsOut == 1 and 'Wheel outside the zone!' or 'Car is Out Of Zone', -1)
-    outsideWarnTimer = CONFIG.outsideWarnCooldown
-  end
-
-  -- Airtime ---------------------------------------------------------
-  local airborne = updateAirtime(car, dt)
-  if airborne and wasDrifting and not airWarned then
-    airWarned = true
-    addMessage('Airtime! Losing points', -1)
-  elseif not airborne then
-    airWarned = false
-  end
-  local airCancel = CONFIG.airtimeCancelSeconds > 0 and airTimer > CONFIG.airtimeCancelSeconds
-
-  -- Collisions ------------------------------------------------------
-  -- By default a hit is ignored: your drift, points and streak carry on. With
-  -- collisionsInterrupt = true a hit ends the drift and locks scoring for a while.
-  local crashed = car.collidedWith == 0
-  if crashed then lastCollisionTime = uptime end
-  local sinceHit = uptime - lastCollisionTime
-
-  local interrupt = CONFIG.collisionsInterrupt
-  local lockedOut = false
-  if interrupt then
-    local wasLocked = collisionTimer > 0
-    collisionTimer = math.max(0, collisionTimer - dt)
-    if crashed and CONFIG.collisionLockoutSeconds > 0 then
-      if not wasLocked then
-        addMessage('Collision! No points for ' .. CONFIG.collisionLockoutSeconds .. 's', -1)
-      end
-      collisionTimer = CONFIG.collisionLockoutSeconds
-    end
-    lockedOut = collisionTimer > 0
-  else
-    collisionTimer = 0
-  end
-
-  -- Scoring ---------------------------------------------------------
-  local tooSlow = slowTimer > CONFIG.slowGraceSeconds
-  local blocked = outsideViolation or tooSlow or airCancel or (interrupt and (crashed or lockedOut))
-  local active = car.isDriftValid and not blocked
-
-  -- A hit can make the game's own drift detection drop out for a moment. Instead of
-  -- ending the drift we hold it (points and streak frozen) until detection comes back.
-  local holding = not interrupt and wasDrifting and not car.isDriftValid and not blocked
-                  and sinceHit < CONFIG.collisionBridgeSeconds
-
-  if active or holding then
-    wasDrifting = true
-    if active then
-      -- Streak. If the game reset its combo because of a hit, carry the old value over.
-      local counter = math.max(1, car.driftComboCounter)
-      if not interrupt and counter < lastCounter and sinceHit < CONFIG.collisionBridgeSeconds + 0.5 then
-        comboOffset = comboOffset + (lastCounter - counter)
-      end
-      lastCounter = counter
-      driftCombo = math.min(CONFIG.maxMultiplier, counter + comboOffset)
-
-      -- Points
-      if airborne then
-        -- no new points in the air, and what you have drains away
-        driftPoints = driftPoints * math.max(0, 1 - CONFIG.airtimePenaltyPerSecond * dt)
+  if source then
+    -- "cover" fit: fill the panel and crop the overflow instead of stretching
+    local uv1, uv2 = vec2(0, 0), vec2(1, 1)
+    local okSize, imgSize = pcall(ui.imageSize, source)
+    if okSize and imgSize and imgSize.x > 0 and imgSize.y > 0 then
+      local panelAspect = size.x / size.y
+      local imgAspect = imgSize.x / imgSize.y
+      if imgAspect > panelAspect then
+        local w = panelAspect / imgAspect
+        uv1.x, uv2.x = (1 - w) / 2, 1 - (1 - w) / 2
       else
-        -- If your scores come out far too low/high, adjust CONFIG.scoreScale.
-        -- (If driftInstantPoints turns out to already be a per-frame amount, drop the "* dt".)
-        -- above the cap the game's multiplier keeps climbing, so scale its points back down to it
-        local capFactor = counter > CONFIG.maxMultiplier and CONFIG.maxMultiplier / counter or 1
-        driftPoints = driftPoints + car.driftInstantPoints * dt * CONFIG.scoreScale * capFactor
+        local h = imgAspect / panelAspect
+        uv1.y, uv2.y = (1 - h) / 2, 1 - (1 - h) / 2
       end
     end
-  elseif wasDrifting then
-    local bank = true
-    local hadPoints = driftPoints > 0
-    if outsideViolation then
-      bank = false
-      if hadPoints then addMessage('Out of zone - drift lost', -1) end
-    elseif airCancel then
-      bank = false
-      if hadPoints then addMessage('Too much airtime - drift lost', -1) end
-    elseif tooSlow then
-      bank = false
-    elseif interrupt and crashed then
-      bank = CONFIG.bankScoreOnCrash
-    end
-    endDrift(bank)
-  else
-    driftCombo = 1
-  end
-
-  updateTandem(car, dt)
-
-  -- Header status ---------------------------------------------------
-  if collisionTimer > 0 then
-    statusText, statusColor = string.format('Collision %.1f', collisionTimer), PALETTE.red
-  elseif not interrupt and wasDrifting and sinceHit < 1.0 then
-    statusText, statusColor = 'Impact', PALETTE.amber -- hit registered, drift kept
-  elseif airborne then
-    statusText, statusColor = 'Airtime', PALETTE.red
-  elseif wheelsOut > 0 and outsideTimer > 0 then
-    statusText, statusColor = wheelsOut == 1 and 'Wheel out' or 'Out of zone', PALETTE.amber
-  elseif wasDrifting and slowTimer > 0 then
-    statusText, statusColor = 'Too slow', PALETTE.amber
-  elseif wasDrifting and tandemActive then
-    statusText, statusColor = 'Tandem', PALETTE.gold
-  elseif wasDrifting then
-    statusText, statusColor = 'Drift', PALETTE.green
-  else
-    statusText, statusColor = 'Drift', PALETTE.grey
+    ui.drawImage(source, vec2(0, 0), size, rgbm.colors.white, uv1, uv2)
+    ui.drawRectFilled(vec2(0, 0), size, rgbm(0, 0, 0, cfg.BG_DARKEN))
   end
 end
 
-function script.drawUI()
-  local dt = ac.getUiState().dt
-  updateMove(dt) -- runs even while hidden so leaving move mode always gets saved
-  if not uiVisible then return end
+-- Mouse handling for moving / resizing. Called from inside the panel's window.
+local function handleMouse(size, screen, hovered)
+  local s = live.scale
+  local gripSize = 20 * s
+  local gripP1 = vec2(size.x - gripSize, size.y - gripSize)
 
-  updateEffects(dt)
-
-  local s = uiScale
-  ui.beginTransparentWindow('Drift', uiPos, vec2(WIN_W * s, WIN_H * s), true)
-
-  -- Custom font; if anything about it fails we just keep the default font.
-  local fontPushed = false
-  if CONFIG.fontName and ui.pushDWriteFont and ui.popDWriteFont then
-    fontPushed = pcall(ui.pushDWriteFont, CONFIG.fontName)
+  local overGrip = false
+  if hovered and not dragging and not resizing then
+    local okGrip, res = pcall(ui.rectHovered, gripP1, size)
+    overGrip = okGrip and res or false
   end
 
-  -- Everything below is laid out in unscaled units relative to this origin and
-  -- multiplied by the UI scale, so the whole UI (confetti included) moves and
-  -- scales as one piece.
-  local origin = ui.getCursor() + vec2(MARGIN * s, MARGIN * s)
-  local CORNERS = ui.CornerFlags.All
-
-  local function at(x, y) return origin + vec2(x * s, y * s) end
-  local function fillRect(x1, y1, x2, y2, color, rounding)
-    ui.drawRectFilled(at(x1, y1), at(x2, y2), color, (rounding or 0) * s)
-  end
-  local function strokeRect(x1, y1, x2, y2, color, rounding, thickness)
-    ui.drawRect(at(x1, y1), at(x2, y2), color, (rounding or 0) * s, CORNERS, (thickness or 1) * s)
-  end
-  local function text(str, size, x, y, color) drawText(str, size, at(x, y), color) end
-  local function width(str, size) return measure(str, size).x / s end -- unscaled width
-  local function textRight(str, size, rightX, y, color)
-    text(str, size, rightX - width(str, size), y, color)
-  end
-
-  local combo = driftCombo
-  local sat = math.saturate(combo / 10)
-  local strength = math.saturate((combo - 1) / 5)
-  local function accent(a) return hsvColor(comboHue, sat, 1, a) end
-
-  -- Panel -------------------------------------------------------------
-  for i = 1, 3 do -- soft glow while drifting / on a new PB
-    local e = i * 2.5
-    if activeFade > 0.01 then
-      strokeRect(-e, -e, PANEL_W + e, PANEL_H + e, accent(activeFade * (0.12 + 0.12 * strength) / i), 10 + e, 2)
+  if hovered and not dragging and not resizing then
+    if ui.mouseDoubleClicked(ui.MouseButton.Left) then
+      resetPosition()
+      return overGrip
     end
-    if pbFlash > 0.01 then
-      strokeRect(-e, -e, PANEL_W + e, PANEL_H + e, rgba(PALETTE.gold, pbFlash * 0.35 / i), 10 + e, 2)
+    if ui.mouseClicked(ui.MouseButton.Left) then
+      if overGrip then resizing = true else dragging = true end
+    end
+
+    local wheel = ui.mouseWheel()
+    if wheel ~= 0 then
+      live.scale = math.clamp(live.scale * (1.08 ^ wheel), MIN_SCALE, MAX_SCALE)
+      saveTimer = 0.6
     end
   end
 
-  fillRect(0, 0, PANEL_W, PANEL_H, rgbm(0.05, 0.05, 0.07, 0.78), 10)
-  if activeFade > 0.01 then
-    fillRect(0, 0, PANEL_W, PANEL_H, accent(0.07 * activeFade), 10)
-  end
-  strokeRect(0, 0, PANEL_W, PANEL_H, hsvColor(comboHue, sat * activeFade, 1, 0.12 + 0.55 * activeFade), 10, 1.5)
-  if pbFlash > 0.01 then
-    strokeRect(0, 0, PANEL_W, PANEL_H, rgba(PALETTE.gold, pbFlash), 10, 2)
-  end
-  if uiMoveMode then -- unlocked: tinted panel + bright outline
-    fillRect(0, 0, PANEL_W, PANEL_H, rgba(PALETTE.ice, 0.10), 10)
-    strokeRect(0, 0, PANEL_W, PANEL_H, rgba(PALETTE.ice, 1), 10, 2)
-  end
-
-  -- Header: status dot, status label, PB (for this track) ----------------
-  local dotColor, dotRadius = statusColor, 4
-  if uiMoveMode then dotColor = PALETTE.ice end
-  if wasDrifting and not uiMoveMode then dotRadius = 4 + math.sin(uptime * 6) * 0.8 end
-  ui.drawCircleFilled(at(PAD + 5, PAD + 8), dotRadius * s, rgba(dotColor, 1), 16)
-  text(uiMoveMode and 'MOVE MODE' or statusText, 13, PAD + 18, PAD, rgbm(1, 1, 1, 0.6))
-
-  local pbColor = pbFlash > 0.01 and rgba(PALETTE.gold, 0.6 + 0.4 * pbFlash) or rgbm(1, 1, 1, 0.6)
-  textRight('PB  ' .. formatInt(driftPB), 13, PANEL_W - PAD, PAD, pbColor)
-
-  -- Score (shrinks automatically if the number gets very long) ----------
-  local scoreText = formatInt(shownPoints)
-  local scoreY = PAD + 20
-  local pillX = PANEL_W - PAD - PILL_W
-  local availW = pillX - PAD - 10
-
-  local size, ptsSize = 48, 17
-  local sw, ptsW = width(scoreText, size), width('pts', ptsSize)
-  local total = sw + 6 + ptsW
-  if total > availW then
-    local k = availW / total
-    size, ptsSize, sw, ptsW = size * k, ptsSize * k, sw * k, ptsW * k
-  end
-
-  local scoreAlpha = 0.45 + 0.55 * activeFade
-  text(scoreText, size, PAD, scoreY, rgbm(1, 1, 1, scoreAlpha))
-  text('pts', ptsSize, PAD + sw + 6, scoreY + size * 0.60, rgbm(1, 1, 1, 0.5 * scoreAlpha))
-
-  -- Combo pill (shakes at high combos) -----------------------------------
-  local shake = 1.5 * math.lerpInvSat(combo, 5, 20) * s
-  local jitter = vec2(math.sin(uptime * 43), math.cos(uptime * 37)) * shake
-  local pillA = at(pillX, scoreY + 12) + jitter
-  local pillB = pillA + vec2(PILL_W * s, PILL_H * s)
-  ui.drawRectFilled(pillA, pillB, accent(0.12 + 0.35 * strength), 8 * s)
-  ui.drawRect(pillA, pillB, accent(0.35 + 0.65 * strength), 8 * s, CORNERS, 1.5 * s)
-
-  local comboText = string.format('%gx', math.ceil(combo * 10) / 10)
-  local cw = width(comboText, 22)
-  drawText(comboText, 22, pillA + vec2((PILL_W - cw) / 2 * s, 3 * s), accent(0.55 + 0.45 * math.max(strength, activeFade)))
-
-  -- Speed bar -------------------------------------------------------------
-  local barX1, barX2 = PAD, PANEL_W - PAD
-  local barW = barX2 - barX1
-  local barY = PANEL_H - PAD - 6
-  local labelColor = rgbm(1, 1, 1, 0.45)
-
-  text('SPEED', 12, barX1, barY - 17, labelColor)
-  textRight(math.floor(speedShown) .. ' km/h', 12, barX2, barY - 17, labelColor)
-
-  fillRect(barX1, barY, barX2, barY + 6, rgbm(1, 1, 1, 0.10), 3)
-  local frac = math.saturate(speedShown / CONFIG.speedBarMax)
-  if frac > 0.01 then
-    local speedRelative = math.saturate(speedShown / CONFIG.requiredSpeed)
-    fillRect(barX1, barY, barX1 + barW * frac, barY + 6, hsvColor(speedRelative * 120, 0.8, 1, 1), 3)
-  end
-  local tickX = barX1 + barW * math.saturate(CONFIG.requiredSpeed / CONFIG.speedBarMax)
-  ui.drawLine(at(tickX, barY - 3), at(tickX, barY + 9), rgbm(1, 1, 1, 0.7), 1.5 * s)
-
-  -- Keybind card: fades in under the counter on mouse-over / in move mode ---
-  if helpAlpha > 0.01 then
-    local ha = helpAlpha
-    local hy = PANEL_H + 8
-    fillRect(0, hy, PANEL_W, hy + HELP_H, rgbm(0.05, 0.05, 0.07, 0.85 * ha), 10)
-    strokeRect(0, hy, PANEL_W, hy + HELP_H, rgbm(1, 1, 1, 0.10 * ha), 10, 1)
-
-    local keyW = 0
-    for _, row in ipairs(HELP_ROWS) do keyW = math.max(keyW, width(row[1], 13)) end
-
-    local y = hy + 12
-    for _, row in ipairs(HELP_ROWS) do
-      text(row[1], 13, PAD, y, rgba(PALETTE.gold, ha))
-      text(row[2], 13, PAD + keyW + 14, y, rgbm(1, 1, 1, 0.75 * ha))
-      y = y + HELP_ROW
-    end
-    text('PB saved for ' .. TRACK_LABEL, 12, PAD, y + 2, rgbm(1, 1, 1, 0.4 * ha))
-  end
-
-  -- Toasts (pushed down while the keybind card is showing) ----------------
-  local toastY = PANEL_H + 12 + (HELP_H + 4) * helpAlpha
-  for _, m in ipairs(messages) do
-    local fade = math.saturate(4 - m.currentPos) * math.saturate(8 - m.age)
-    if fade > 0.01 then
-      local slideIn = math.saturate(1 - m.age * 10) ^ 2 * 100
-      local w = width(m.text, 16) + 34
-      local y = toastY + (m.currentPos - 1) * TOAST_STEP
-      local mood = MOOD[m.mood] or PALETTE.ice
-
-      fillRect(slideIn, y, slideIn + w, y + TOAST_H, rgbm(0.05, 0.05, 0.07, 0.78 * fade), 8)
-      fillRect(slideIn + 7, y + 6, slideIn + 10, y + TOAST_H - 6, rgba(mood, fade), 2)
-      text(m.text, 16, slideIn + 20, y + 4, rgbm(1, 1, 1, fade))
+  if dragging or resizing then
+    if ui.mouseDown(ui.MouseButton.Left) then
+      local delta = ui.mouseDelta()
+      if dragging then
+        live.posX = live.posX + delta.x / screen.x
+        live.posY = live.posY + delta.y / screen.y
+      else
+        -- panel is centred horizontally, so double the change to keep the corner under the cursor
+        live.scale = math.clamp(live.scale + 2 * delta.x / BASE_W, MIN_SCALE, MAX_SCALE)
+      end
+    else
+      dragging, resizing = false, false
+      savePosition()
     end
   end
 
-  -- Confetti (new PB only) ------------------------------------------------
-  for _, g in ipairs(glitter) do
-    ui.drawLine(at(g.pos.x, g.pos.y), at(g.pos.x + g.velocity.x * 4, g.pos.y + g.velocity.y * 4), g.color, 2 * s)
+  return overGrip
+end
+
+local function drawHoverOverlay(size, accent, overGrip)
+  local s = live.scale
+
+  -- outline
+  ui.drawRect(vec2(1, 1), size - 1, accent)
+
+  -- help strip along the bottom
+  local stripH = 20 * s
+  ui.drawRectFilled(vec2(0, size.y - stripH), size, rgbm(0, 0, 0, 0.7))
+  textCentered('Drag: move   |   Scroll / corner: size   |   Double-click: reset',
+    10 * s, size.y - stripH + 4 * s, rgbm(0.9, 0.9, 0.9, 1), size.x)
+
+  -- resize grip in the bottom-right corner
+  local c = (overGrip or resizing) and rgbm.colors.white or accent
+  local g = 14 * s
+  local x2, y2 = size.x - 4 * s, size.y - 4 * s
+  ui.drawLine(vec2(x2 - g, y2), vec2(x2, y2 - g), c, 2)
+  ui.drawLine(vec2(x2 - g * 0.5, y2), vec2(x2, y2 - g * 0.5), c, 2)
+end
+
+local function drawPanel()
+  local screen = ac.getUI().windowSize
+  local s = live.scale
+  local size = vec2(BASE_W * s, BASE_H * s)
+
+  -- keep the panel fully on screen
+  local halfFrac = math.min(size.x / 2 / screen.x, 0.5)
+  live.posX = math.clamp(live.posX, halfFrac, 1 - halfFrac)
+  live.posY = math.clamp(live.posY, 0, math.max(0, 1 - size.y / screen.y))
+  local pos = vec2(screen.x * live.posX - size.x / 2, screen.y * live.posY)
+
+  ui.transparentWindow('mapTimerPanel', pos, size, true, true, function()
+    ui.pushDWriteFont(cfg.FONT)
+
+    drawBackground(size)
+
+    local accent = cfg.ACCENT_COLOR
+    local remaining = state.remaining
+    local inWarning = remaining ~= nil and remaining <= cfg.WARNING_SECONDS
+    local ended = remaining ~= nil and remaining <= 0
+
+    -- server name
+    local name = cfg.SERVER_NAME
+    if not name or name == '' then
+      local okName, serverName = pcall(ac.getServerName)
+      name = (okName and serverName and serverName ~= '') and serverName or 'SERVER'
+    end
+    textCentered(string.upper(name), 19 * s, 8 * s, rgbm.colors.white, size.x)
+
+    -- accent line
+    ui.drawRectFilled(vec2(size.x * 0.25, 34 * s), vec2(size.x * 0.75, 36 * s), accent)
+
+    -- label
+    local label = ended and 'MAP SWITCHING' or 'MAP SWITCHES IN'
+    textCentered(label, 12 * s, 42 * s, rgbm(0.85, 0.85, 0.85, 1), size.x)
+
+    -- timer (pulses red once the warning time is reached)
+    local timerColor = rgbm.colors.white
+    if inWarning then
+      local pulse = 0.55 + 0.45 * math.sin(os.clock() * 6)
+      timerColor = rgbm(1, 0.25 + 0.2 * (1 - pulse), 0.2, 1)
+    end
+    local timerText = remaining and formatTime(remaining) or '--:--'
+    textCentered(timerText, 52 * s, 56 * s, timerColor, size.x)
+
+    -- progress bar
+    local barY1, barY2 = size.y - 9 * s, size.y - 4 * s
+    local barX1, barX2 = 12 * s, size.x - 12 * s
+    ui.drawRectFilled(vec2(barX1, barY1), vec2(barX2, barY2), rgbm(1, 1, 1, 0.15))
+    if remaining and state.total and state.total > 0 then
+      local fraction = math.clamp(remaining / state.total, 0, 1)
+      ui.drawRectFilled(vec2(barX1, barY1),
+        vec2(barX1 + (barX2 - barX1) * fraction, barY2),
+        inWarning and rgbm(1, 0.25, 0.2, 1) or accent)
+    end
+
+    -- mouse: move / resize / reset
+    local hovered = ui.windowHovered()
+    local overGrip = handleMouse(size, screen, hovered)
+    if hovered or dragging or resizing then
+      drawHoverOverlay(size, accent, overGrip)
+    end
+
+    ui.popDWriteFont()
+  end)
+end
+
+---------------------------------------------------------------------------
+-- CSP callbacks
+---------------------------------------------------------------------------
+
+function script.drawUI(dt)
+  drawUICalled = true
+  drawPanel()
+end
+
+function script.update(dt)
+  tick()
+
+  -- TEST_SOUND: play the sound once, a few seconds after joining
+  if testTimer then
+    testTimer = testTimer - dt
+    if testTimer <= 0 then
+      testTimer = nil
+      local ok = playSound()
+      reportSound(ok, ok and 'test: playing now (hear nothing? the link is not playable)'
+        or 'test: could not start the sound')
+    end
   end
 
-  if fontPushed then ui.popDWriteFont() end
-  ui.endTransparentWindow()
+  -- save a moment after the player stops scrolling to resize
+  if saveTimer > 0 and not dragging and not resizing then
+    saveTimer = saveTimer - dt
+    if saveTimer <= 0 then savePosition() end
+  end
+
+  -- Safety net: if this CSP build never calls script.drawUI, draw from update instead.
+  if not drawUICalled then
+    fallbackTimer = fallbackTimer + dt
+    if fallbackTimer > 2 then drawPanel() end
+  end
 end
