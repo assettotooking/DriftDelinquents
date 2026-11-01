@@ -22,6 +22,7 @@
        SOUND_URL = "https://your-link/warning.mp3"
        SOUND_VOLUME = 0.4
        WARNING_SECONDS = 120
+       TEST_SOUND = 0
        MAP_DURATION_MINUTES = 0
        BACKGROUND_URL = ""
        SHOW_TOAST = 1
@@ -35,26 +36,30 @@
 
   SETTINGS
   SERVER_NAME           Text shown at the top of the panel. Empty = real server name.
-  SOUND_URL             Link to the warning sound (mp3 / ogg / wav). This is the
-                        sound that plays at WARNING_SECONDS. You can paste:
-                          - a direct link to the file, or
-                          - a normal Google Drive share link (the file must be set
-                            to "Anyone with the link"), or
-                          - a normal Dropbox share link.
-                        Drive and Dropbox share links are converted to direct
-                        download links automatically.
+  SOUND_URL             Link to the warning sound. It can be:
+                          - a direct link to an mp3 / ogg / wav file, or
+                          - a link to a .zip that contains the sound (the file name
+                            is given in SOUND_FILE, otherwise the first audio file in
+                            the zip is used; background.png in the zip is used as the
+                            panel background), or
+                          - a normal Google Drive or Dropbox share link to either of
+                            those. Drive files must be shared as "Anyone with the link".
+                        The script checks what it downloaded and handles it
+                        automatically.
+  SOUND_FILE            Name of the sound inside the zip (zip links only).
   SOUND_VOLUME          0.0 - 1.0
   WARNING_SECONDS       When the countdown reaches this, the sound plays (120 = 2 min).
+  TEST_SOUND            1 = for testing: plays the sound as soon as it has loaded and
+                        shows a pop-up saying whether loading worked or why it failed.
+                        Set back to 0 for normal use.
   MAP_DURATION_MINUTES  0 = use the session length from the server.
                         Above 0 = use this many minutes instead (counted from the
                         start of the session, so everyone sees the same time).
   BACKGROUND_URL        Direct link to a PNG/JPG for the panel background. Leave
-                        empty to use background.png from ASSETS_URL, or a plain
+                        empty to use background.png from the zip, or a plain
                         dark panel.
-  ASSETS_URL            (Optional) Direct link to a .zip containing background.png
-                        (and optionally a sound named SOUND_FILE, only used when
-                        SOUND_URL is empty). Must be a direct download link.
-  SOUND_FILE            File name of the sound inside the zip (zip mode only).
+  ASSETS_URL            (Optional, older option) Direct link to a .zip with
+                        background.png. Not needed if SOUND_URL is a zip.
   SHOW_TOAST            1 = also show a pop-up message at the warning time.
   POS_X / POS_Y         Default panel position as a fraction of the screen
                         (X = centre of the panel, Y = top edge).
@@ -66,12 +71,13 @@
 local cfg = ac.configValues({
   SERVER_NAME = '',
   MAP_DURATION_MINUTES = 0,
-  WARNING_SECONDS = 30,
+  WARNING_SECONDS = 120,
   BACKGROUND_URL = '',
   SOUND_URL = 'https://drive.google.com/file/d/1jIimgXElV90IJxu3Fs1oxjRmj2ni270A/view?usp=drive_link',
   ASSETS_URL = '',
   SOUND_FILE = 'halo-reach-30-seconds-remain.mp3',
-  SOUND_VOLUME = 0.3,
+  SOUND_VOLUME = 0.4,
+  TEST_SOUND = false,
   SHOW_TOAST = true,
   FONT = 'Segoe UI',
   POS_X = 0.95,
@@ -127,7 +133,7 @@ local function directLink(url)
           or url:match('drive%.google%.com/open%?id=([%w_%-]+)')
           or url:match('drive%.google%.com/uc%?[^%s]-id=([%w_%-]+)')
   if id then
-    return 'https://drive.google.com/uc?export=download&id=' .. id
+    return 'https://drive.usercontent.google.com/download?id=' .. id .. '&export=download&confirm=t'
   end
 
   -- Dropbox: make sure it ends up as dl=1
@@ -142,90 +148,145 @@ local function directLink(url)
   return url
 end
 
--- Builds the audio event from a file path or from raw downloaded data.
-local function createSoundEvent(params)
-  local ok, ev = pcall(ac.AudioEvent.fromFile, params, false)
-  if ok and ev then
-    soundEvent = ev
-    ac.log('[MapTimer] warning sound loaded')
-    return true
-  end
-  ac.warn('[MapTimer] could not load sound: ' .. tostring(ev))
-  return false
-end
-
-local function loadSoundFromUrl(url)
-  -- Fallback: plain download, save to the CSP cache folder, load from there.
-  local function viaFile()
-    web.get(url, function(err, response)
-      local body = response and response.body
-      if err or not body or #body == 0 then
-        ac.warn('[MapTimer] could not download sound: ' .. tostring(err))
-        return
-      end
-      local path = ac.getFolder(ac.FolderID.ExtCache) .. '/map_timer_warning.mp3'
-      io.save(path, body)
-      createSoundEvent({ filename = path, use3D = false, loop = false })
+-- Writes to the CSP log, and (with TEST_SOUND = 1) also shows a pop-up in game.
+local function reportSound(ok, message)
+  if ok then ac.log('[MapTimer] ' .. message) else ac.warn('[MapTimer] ' .. message) end
+  if cfg.TEST_SOUND then
+    pcall(function()
+      local icon = ok and (ui.Icons.Confirm or ui.Icons.Warning) or ui.Icons.Warning
+      ui.toast(icon, 'Map timer sound: ' .. message)
     end)
-  end
-
-  -- Preferred: let CSP download the sound and hand over the data directly.
-  local ok, err = pcall(function()
-    web.loadRemoteSound(url, function(downloadErr, data)
-      if downloadErr or not data then
-        ac.warn('[MapTimer] sound download failed (' .. tostring(downloadErr) .. '), trying fallback')
-        pcall(viaFile)
-        return
-      end
-      local created = createSoundEvent({
-        stream = { name = 'map_timer_warning.mp3', data = data, size = #data },
-        use3D = false, loop = false,
-      })
-      if not created then pcall(viaFile) end
-    end)
-  end)
-
-  if not ok then
-    ac.warn('[MapTimer] loadRemoteSound unavailable (' .. tostring(err) .. '), trying fallback')
-    pcall(viaFile)
   end
 end
 
----------------------------------------------------------------------------
--- Assets (optional zip with background, and sound if SOUND_URL is empty)
----------------------------------------------------------------------------
+-- Folder where a downloaded sound file can be saved.
+local function cacheFolder()
+  local candidates = {
+    function() return ac.getFolder(ac.FolderID.ExtCache) end,
+    function() return ac.getFolder(ac.FolderID.ScriptConfig) end,
+    function() return os.getenv('TEMP') end,
+  }
+  for _, getFolder in ipairs(candidates) do
+    local ok, folder = pcall(getFolder)
+    if ok and folder and folder ~= '' then return folder end
+  end
+  return nil
+end
 
-local function loadAssets()
-  local url = cfg.ASSETS_URL
-  if not url or url == '' then return end
+-- Creates the audio event from a sound file on disk.
+local function createSoundEvent(path)
+  local ok, ev = pcall(ac.AudioEvent.fromFile, { filename = path, use3D = false, loop = false }, false)
+  if not ok or not ev then
+    reportSound(false, 'could not load sound file: ' .. tostring(ev))
+    return
+  end
+
+  soundEvent = ev
+  local okValid, valid = pcall(function() return ev:isValid() end)
+  reportSound(true, 'sound loaded' .. (okValid and not valid and ' (but it reports as not valid)' or ''))
+
+  if cfg.TEST_SOUND then
+    pcall(function()
+      ev.volume = cfg.SOUND_VOLUME
+      ev:start()
+    end)
+  end
+end
+
+-- Downloads a .zip, keeps its folder (for background.png), optionally loads a sound from it.
+local function loadZip(url, wantSound)
+  local function fail(message)
+    if wantSound then reportSound(false, message) else ac.warn('[MapTimer] ' .. message) end
+  end
 
   local ok, err = pcall(function()
     web.loadRemoteAssets(url, function(downloadErr, folder)
       if downloadErr or not folder then
-        ac.warn('[MapTimer] could not download assets: ' .. tostring(downloadErr))
+        fail('could not download zip: ' .. tostring(downloadErr))
         return
       end
       assetsFolder = folder
+      if not wantSound then return end
 
-      -- zip sound is only used when no SOUND_URL is set
-      if cfg.SOUND_URL and cfg.SOUND_URL ~= '' then return end
-
-      local soundPath = folder .. '/' .. cfg.SOUND_FILE
-      if not io.fileExists(soundPath) then
-        ac.warn('[MapTimer] sound file not found in zip: ' .. cfg.SOUND_FILE)
-        return
+      local path = folder .. '/' .. cfg.SOUND_FILE
+      if not io.fileExists(path) then
+        -- sound name not found, use the first audio file in the zip instead
+        local okScan, files = pcall(io.scanDir, folder, '*')
+        if okScan and type(files) == 'table' then
+          for _, name in ipairs(files) do
+            local ext = tostring(name):lower():match('%.(%w+)$')
+            if ext == 'mp3' or ext == 'ogg' or ext == 'wav' then
+              local candidate = folder .. '/' .. name
+              if io.fileExists(candidate) then path = candidate break end
+            end
+          end
+        end
       end
-      createSoundEvent({ filename = soundPath, use3D = false, loop = false })
+
+      if io.fileExists(path) then
+        createSoundEvent(path)
+      else
+        fail('no audio file found in the zip (looked for ' .. tostring(cfg.SOUND_FILE) .. ')')
+      end
     end)
   end)
 
-  if not ok then ac.warn('[MapTimer] asset loading failed: ' .. tostring(err)) end
+  if not ok then fail('zip loading failed: ' .. tostring(err)) end
 end
 
-if cfg.SOUND_URL and cfg.SOUND_URL ~= '' then
-  loadSoundFromUrl(directLink(cfg.SOUND_URL))
+-- Downloads SOUND_URL, works out whether it is a zip or a sound file, and loads it.
+local function loadSound(url)
+  web.get(url, function(err, response)
+    local body = response and response.body
+    if err or not body or #body == 0 then
+      reportSound(false, 'download failed (' .. tostring(err or (response and response.status) or 'no data') .. ')')
+      return
+    end
+
+    local head = body:sub(1, 4)
+
+    -- zip file
+    if head:sub(1, 2) == 'PK' then
+      loadZip(url, true)
+      return
+    end
+
+    -- a web page instead of a file (private Drive file, share page, error page ...)
+    if head:sub(1, 1) == '<' then
+      reportSound(false, 'link gave a web page instead of a sound - use a direct link, or share the file as "Anyone with the link"')
+      return
+    end
+
+    local ext = 'mp3'
+    if head == 'OggS' then ext = 'ogg' elseif head == 'RIFF' then ext = 'wav' end
+
+    local folder = cacheFolder()
+    if not folder then
+      reportSound(false, 'no folder available to save the sound')
+      return
+    end
+
+    local path = folder .. '/map_timer_warning.' .. ext
+    local okSave, saveErr = pcall(io.save, path, body, true)
+    if not okSave or not io.fileExists(path) then
+      reportSound(false, 'could not save sound file: ' .. tostring(saveErr))
+      return
+    end
+
+    createSoundEvent(path)
+  end)
 end
-loadAssets()
+
+local soundUrl = directLink(cfg.SOUND_URL)
+if soundUrl and soundUrl ~= '' then
+  local ok, err = pcall(loadSound, soundUrl)
+  if not ok then reportSound(false, 'sound loading error: ' .. tostring(err)) end
+end
+
+-- Optional older setting: a zip with background.png (and a sound, if SOUND_URL is empty)
+if cfg.ASSETS_URL and cfg.ASSETS_URL ~= '' then
+  loadZip(directLink(cfg.ASSETS_URL), not (soundUrl and soundUrl ~= ''))
+end
 
 local function playWarning()
   if soundEvent then
