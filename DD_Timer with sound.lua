@@ -1,7 +1,7 @@
 --[[
   MAP TIMER  -  CSP online script for AssettoServer
   Shows a countdown until the map ends, a server name, a custom background,
-  and plays a sound when the warning time (default 2 minutes) is reached.
+  and plays a sound when the warning time (default 30 seconds) is reached.
 
   MOVE / RESIZE (each player, in game)
   Hover the panel with the mouse cursor, then:
@@ -21,7 +21,7 @@
        SERVER_NAME = "My Server Name"
        SOUND_URL = "https://your-link/warning.mp3"
        SOUND_VOLUME = 0.4
-       WARNING_SECONDS = 120
+       WARNING_SECONDS = 30
        TEST_SOUND = 0
        MAP_DURATION_MINUTES = 0
        BACKGROUND_URL = ""
@@ -36,30 +36,26 @@
 
   SETTINGS
   SERVER_NAME           Text shown at the top of the panel. Empty = real server name.
-  SOUND_URL             Link to the warning sound. It can be:
-                          - a direct link to an mp3 / ogg / wav file, or
-                          - a link to a .zip that contains the sound (the file name
-                            is given in SOUND_FILE, otherwise the first audio file in
-                            the zip is used; background.png in the zip is used as the
-                            panel background), or
-                          - a normal Google Drive or Dropbox share link to either of
-                            those. Drive files must be shared as "Anyone with the link".
-                        The script checks what it downloaded and handles it
-                        automatically.
-  SOUND_FILE            Name of the sound inside the zip (zip links only).
+  SOUND_URL             Link to the warning sound (mp3 / ogg / wav). It is played
+                        straight from the link with CSP's media player, the same way
+                        the Drift Counter plays its PB sound. You can paste:
+                          - a direct link to the file, or
+                          - a normal Google Drive share link (the file must be set
+                            to "Anyone with the link"), or
+                          - a normal Dropbox share link.
+                        Drive and Dropbox share links are converted automatically.
   SOUND_VOLUME          0.0 - 1.0
-  WARNING_SECONDS       When the countdown reaches this, the sound plays (120 = 2 min).
-  TEST_SOUND            1 = for testing: plays the sound as soon as it has loaded and
-                        shows a pop-up saying whether loading worked or why it failed.
-                        Set back to 0 for normal use.
+  WARNING_SECONDS       When the countdown reaches this, the sound plays (default 30;
+                        120 would be 2 minutes).
+  TEST_SOUND            1 = for testing: plays the sound about 3 seconds after you
+                        join and shows a pop-up. Set back to 0 for normal use.
   MAP_DURATION_MINUTES  0 = use the session length from the server.
                         Above 0 = use this many minutes instead (counted from the
                         start of the session, so everyone sees the same time).
   BACKGROUND_URL        Direct link to a PNG/JPG for the panel background. Leave
-                        empty to use background.png from the zip, or a plain
+                        empty to use background.png from ASSETS_URL, or a plain
                         dark panel.
-  ASSETS_URL            (Optional, older option) Direct link to a .zip with
-                        background.png. Not needed if SOUND_URL is a zip.
+  ASSETS_URL            (Optional) Direct link to a .zip containing background.png.
   SHOW_TOAST            1 = also show a pop-up message at the warning time.
   POS_X / POS_Y         Default panel position as a fraction of the screen
                         (X = centre of the panel, Y = top edge).
@@ -73,11 +69,10 @@ local cfg = ac.configValues({
   MAP_DURATION_MINUTES = 0,
   WARNING_SECONDS = 30,
   BACKGROUND_URL = '',
-  SOUND_URL = 'https://github.com/assettotooking/DriftDelinquents/raw/refs/heads/main/halo-reach-30-seconds-remain.mp3',
+  SOUND_URL = 'https://raw.githubusercontent.com/assettotooking/DriftDelinquents/refs/heads/main/halo-reach-30-seconds-remain.mp3',
   ASSETS_URL = '',
-  SOUND_FILE = 'halo-reach-30-seconds-remain.mp3',
   SOUND_VOLUME = 0.4,
-  TEST_SOUND = 1,
+  TEST_SOUND = false,
   SHOW_TOAST = true,
   FONT = 'Segoe UI',
   POS_X = 0.95,
@@ -98,10 +93,10 @@ local state = {
   last = nil,      -- remaining value of the previous frame
 }
 
-local soundEvent = nil
 local assetsFolder = nil
 local drawUICalled = false
 local fallbackTimer = 0
+local testTimer = cfg.TEST_SOUND and 3 or nil
 
 ---------------------------------------------------------------------------
 -- Saved position / size (stored on the player's PC)
@@ -121,7 +116,7 @@ local function resetPosition()
 end
 
 ---------------------------------------------------------------------------
--- Warning sound (downloaded from SOUND_URL)
+-- Warning sound (played from SOUND_URL with CSP's media player)
 ---------------------------------------------------------------------------
 
 -- Turns normal share links into direct download links.
@@ -133,7 +128,7 @@ local function directLink(url)
           or url:match('drive%.google%.com/open%?id=([%w_%-]+)')
           or url:match('drive%.google%.com/uc%?[^%s]-id=([%w_%-]+)')
   if id then
-    return 'https://drive.usercontent.google.com/download?id=' .. id .. '&export=download&confirm=t'
+    return 'https://drive.google.com/uc?export=download&id=' .. id
   end
 
   -- Dropbox: make sure it ends up as dl=1
@@ -159,144 +154,64 @@ local function reportSound(ok, message)
   end
 end
 
--- Folder where a downloaded sound file can be saved.
-local function cacheFolder()
-  local candidates = {
-    function() return ac.getFolder(ac.FolderID.ExtCache) end,
-    function() return ac.getFolder(ac.FolderID.ScriptConfig) end,
-    function() return os.getenv('TEMP') end,
-  }
-  for _, getFolder in ipairs(candidates) do
-    local ok, folder = pcall(getFolder)
-    if ok and folder and folder ~= '' then return folder end
-  end
-  return nil
-end
+-- Same setup the Drift Counter uses for its PB sound.
+local soundPlayer = nil
 
--- Creates the audio event from a sound file on disk.
-local function createSoundEvent(path)
-  local ok, ev = pcall(ac.AudioEvent.fromFile, { filename = path, use3D = false, loop = false }, false)
-  if not ok or not ev then
-    reportSound(false, 'could not load sound file: ' .. tostring(ev))
-    return
-  end
-
-  soundEvent = ev
-  local okValid, valid = pcall(function() return ev:isValid() end)
-  reportSound(true, 'sound loaded' .. (okValid and not valid and ' (but it reports as not valid)' or ''))
-
-  if cfg.TEST_SOUND then
-    pcall(function()
-      ev.volume = cfg.SOUND_VOLUME
-      ev:start()
+do
+  local url = directLink(cfg.SOUND_URL)
+  if url and url ~= '' then
+    local ok, player = pcall(function()
+      local p = ui.MediaPlayer()
+      p:setSource(url)
+      p:setVolume(cfg.SOUND_VOLUME)
+      p:setLooping(false)
+      return p
     end)
+    if ok and player then
+      soundPlayer = player
+      ac.log('[MapTimer] sound player ready for ' .. url)
+    else
+      reportSound(false, 'could not create the sound player: ' .. tostring(player))
+    end
   end
 end
 
--- Downloads a .zip, keeps its folder (for background.png), optionally loads a sound from it.
-local function loadZip(url, wantSound)
-  local function fail(message)
-    if wantSound then reportSound(false, message) else ac.warn('[MapTimer] ' .. message) end
+local function playSound()
+  if not soundPlayer then
+    ac.warn('[MapTimer] no sound player (check SOUND_URL)')
+    return false
   end
-
   local ok, err = pcall(function()
-    web.loadRemoteAssets(url, function(downloadErr, folder)
-      if downloadErr or not folder then
-        fail('could not download zip: ' .. tostring(downloadErr))
-        return
-      end
-      assetsFolder = folder
-      if not wantSound then return end
+    soundPlayer:setVolume(cfg.SOUND_VOLUME)
+    soundPlayer:setCurrentTime(0) -- restart from the beginning if it is still playing
+    soundPlayer:play()
+  end)
+  if not ok then ac.warn('[MapTimer] could not play the sound: ' .. tostring(err)) end
+  return ok
+end
 
-      local path = folder .. '/' .. cfg.SOUND_FILE
-      if not io.fileExists(path) then
-        -- sound name not found, use the first audio file in the zip instead
-        local okScan, files = pcall(io.scanDir, folder, '*')
-        if okScan and type(files) == 'table' then
-          for _, name in ipairs(files) do
-            local ext = tostring(name):lower():match('%.(%w+)$')
-            if ext == 'mp3' or ext == 'ogg' or ext == 'wav' then
-              local candidate = folder .. '/' .. name
-              if io.fileExists(candidate) then path = candidate break end
-            end
-          end
+---------------------------------------------------------------------------
+-- Optional background zip (ASSETS_URL)
+---------------------------------------------------------------------------
+
+do
+  local url = directLink(cfg.ASSETS_URL)
+  if url and url ~= '' then
+    local ok, err = pcall(function()
+      web.loadRemoteAssets(url, function(downloadErr, folder)
+        if downloadErr or not folder then
+          ac.warn('[MapTimer] could not download assets: ' .. tostring(downloadErr))
+          return
         end
-      end
-
-      if io.fileExists(path) then
-        createSoundEvent(path)
-      else
-        fail('no audio file found in the zip (looked for ' .. tostring(cfg.SOUND_FILE) .. ')')
-      end
+        assetsFolder = folder
+      end)
     end)
-  end)
-
-  if not ok then fail('zip loading failed: ' .. tostring(err)) end
-end
-
--- Downloads SOUND_URL, works out whether it is a zip or a sound file, and loads it.
-local function loadSound(url)
-  web.get(url, function(err, response)
-    local body = response and response.body
-    if err or not body or #body == 0 then
-      reportSound(false, 'download failed (' .. tostring(err or (response and response.status) or 'no data') .. ')')
-      return
-    end
-
-    local head = body:sub(1, 4)
-
-    -- zip file
-    if head:sub(1, 2) == 'PK' then
-      loadZip(url, true)
-      return
-    end
-
-    -- a web page instead of a file (private Drive file, share page, error page ...)
-    if head:sub(1, 1) == '<' then
-      reportSound(false, 'link gave a web page instead of a sound - use a direct link, or share the file as "Anyone with the link"')
-      return
-    end
-
-    local ext = 'mp3'
-    if head == 'OggS' then ext = 'ogg' elseif head == 'RIFF' then ext = 'wav' end
-
-    local folder = cacheFolder()
-    if not folder then
-      reportSound(false, 'no folder available to save the sound')
-      return
-    end
-
-    local path = folder .. '/map_timer_warning.' .. ext
-    local okSave, saveErr = pcall(io.save, path, body, true)
-    if not okSave or not io.fileExists(path) then
-      reportSound(false, 'could not save sound file: ' .. tostring(saveErr))
-      return
-    end
-
-    createSoundEvent(path)
-  end)
-end
-
-local soundUrl = directLink(cfg.SOUND_URL)
-if soundUrl and soundUrl ~= '' then
-  local ok, err = pcall(loadSound, soundUrl)
-  if not ok then reportSound(false, 'sound loading error: ' .. tostring(err)) end
-end
-
--- Optional older setting: a zip with background.png (and a sound, if SOUND_URL is empty)
-if cfg.ASSETS_URL and cfg.ASSETS_URL ~= '' then
-  loadZip(directLink(cfg.ASSETS_URL), not (soundUrl and soundUrl ~= ''))
+    if not ok then ac.warn('[MapTimer] asset loading failed: ' .. tostring(err)) end
+  end
 end
 
 local function playWarning()
-  if soundEvent then
-    pcall(function()
-      soundEvent.volume = cfg.SOUND_VOLUME
-      soundEvent:start()
-    end)
-  else
-    ac.warn('[MapTimer] warning time reached but the sound is not loaded')
-  end
+  playSound()
   if cfg.SHOW_TOAST then
     pcall(function()
       local mins = math.floor(cfg.WARNING_SECONDS / 60)
@@ -539,6 +454,17 @@ end
 
 function script.update(dt)
   tick()
+
+  -- TEST_SOUND: play the sound once, a few seconds after joining
+  if testTimer then
+    testTimer = testTimer - dt
+    if testTimer <= 0 then
+      testTimer = nil
+      local ok = playSound()
+      reportSound(ok, ok and 'test: playing now (hear nothing? the link is not playable)'
+        or 'test: could not start the sound')
+    end
+  end
 
   -- save a moment after the player stops scrolling to resize
   if saveTimer > 0 and not dragging and not resizing then
